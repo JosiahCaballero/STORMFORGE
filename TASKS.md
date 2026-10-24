@@ -30,3 +30,15 @@ backend `python -m pytest -q` 97 passed; frontend `npx vitest run` 7 passed.
 ## Decisions log
 - Original 100-origin sample unrecoverable; deterministic 102-origin sample (every 18th node by sorted id).
 - Teammates don't commit; Lead commits verified milestones.
+
+
+## Final response-management pivot (2026-10-24, spec "Final Response Management")
+- ✅ Phase A (c644494): `backend/app/allocation.py` — seeded simulated debris (separate from NOAA flooding, bridges excluded, per-category deterministic), unified deterministic evaluator
+  (flood -> debris -> crews -> EMS/supply/medical -> water -> helicopter; order-independent), 6 resources / 11 units, rejected deployments never consume, per-region before/after, map layers;
+  `/api/v1/allocation/{setup,evaluate,compare,actions}`; 18 tests.
+- ✅ Phase C (0e68423): `backend/app/alloc_planner.py` — Gemma ranks `resource@zone` action ids; bounded greedy candidate generator; validation (ids, inventory, feasibility, leave-one-out redundancy,
+  numbers, zone claims); labelled fallback; `/api/v1/allocation/plan`; 30 offline tests; live-verified with real Gemma.
+- 🔧 Phase B (frontend teammate): Impact | Deploy | Compare UI, overlays, 5-step guided demo, docs/DEMO.md, e2e at 1366x768 + 1920x1080.
+- ⬜ Phase D: Lead browser verification, final docs, commit.
+- Modeling decisions: EMS/supply coverage = within 1.5 km of road travel (assumed service radius); water rescue 500 m screening radius; helicopter <= 10 locations; provisional response base on W 9th St (in the Cat-5 core component);
+  hospital node is a dead end that floods shut at Cat 3+ so it cannot be a dispatch origin. Medical support coverage stays unbounded (preserves earlier staging semantics).
