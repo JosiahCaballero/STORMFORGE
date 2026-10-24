@@ -1,0 +1,12 @@
+[
+ {
+  "name": "Flagler Hospital",
+  "lon": -81.31941620829483,
+  "lat": 29.8626603,
+  "snap_lon": -81.3185296,
+  "snap_lat": 29.865770199999993,
+  "snap_m": 354.4,
+  "source": "OpenStreetMap (emergency=yes tag)",
+  "verified": false
+ }
+]

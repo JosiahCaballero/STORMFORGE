@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #060a13;
+  --panel: rgba(11, 17, 31, 0.86);
+  --line: #1b2842;
+  --ink: #e6edf7;
+  --mute: #8a99b5;
+  --cyan: #22d3ee;
+  --amber: #fbbf24;
+  --coral: #fb5d73;
+}
+html, body, #root { height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
+body { font-family: 'IBM Plex Sans', system-ui, sans-serif; overflow: hidden; }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.panel { background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(14px); border-radius: 10px; }
+.label { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--mute); }
+.maplibregl-ctrl-attrib { background: rgba(6,10,19,.7) !important; color: var(--mute) !important; }
+.maplibregl-ctrl-attrib a { color: var(--mute) !important; }
+.maplibregl-ctrl-group { background: var(--panel) !important; border: 1px solid var(--line); }
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1); }
+::-webkit-scrollbar { width: 6px } ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

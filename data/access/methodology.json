@@ -1,0 +1,12 @@
+{
+  "study_area": "St. Augustine, FL; 4km OSM network from center",
+  "noaa_input": "2026 reprocessed NOAA SLOSH MOM HIGH tide category 1-5 crops",
+  "noaa_interpretation": "potential planning-envelope inundation, NOT a storm forecast",
+  "noaa_nodata": "255 means NoData, NOT confirmed dry",
+  "closure_rule": "At least one sample every ~20m has NOAA depth class >= 3 (lower bound 2ft)",
+  "bridge_rule": "OSM bridge=yes edges exempt from water-depth closure; bridge approaches not exempt; NOT a structural safety assessment",
+  "routing": "directed OSM driving graph, shortest path by road length (not ambulance travel time)",
+  "origins": "100 deterministic graph nodes, NOT population-weighted",
+  "facilities": "OSM-tagged hospitals; emergency departments NOT verified",
+  "limitations": "No actual storm timeline, rainfall, bridge deck heights, wind effects, congestion, emergency speeds, population, or official road closures."
+}

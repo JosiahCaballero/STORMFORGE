@@ -1,0 +1,7 @@
+category,directed_edges_open,directed_edges_closed,sample_origin_nodes,hospitals_found,origins_with_hospital_route,origins_without_hospital_route,mean_reachable_distance_m,median_reachable_distance_m
+0,4691,0,100,1,99,1,5722.8,5670.0
+1,3076,1615,100,1,49,51,4939.7,4586.6
+2,1904,2787,100,1,35,65,4955.8,5065.8
+3,1436,3255,100,1,0,100,,
+4,1123,3568,100,1,0,100,,
+5,979,3712,100,1,0,100,,
