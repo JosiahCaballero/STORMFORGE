@@ -26,6 +26,21 @@ function Section({ title, right, children }: { title: string; right?: React.Reac
   )
 }
 
+function Progress() {
+  const msgs = ['Reading the four module reports…', 'Ranking hypothetical staging sites…', 'Validating the plan against NetworkX…']
+  const [i, setI] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setI((x) => (x + 1) % msgs.length), 2600)
+    return () => clearInterval(id)
+  }, [msgs.length])
+  return (
+    <div className="mt-2" role="status" aria-live="polite">
+      <div className="h-1 overflow-hidden rounded-full" style={{ background: '#141d33' }}><div className="indeterminate h-full w-1/3 rounded-full" style={{ background: 'linear-gradient(90deg,#22d3ee,#a78bfa)' }} /></div>
+      <div className="mt-1 text-[11px]" style={{ color: 'var(--mute)' }}>{msgs[i]}</div>
+    </div>
+  )
+}
+
 function Err({ e }: { e: string }) {
   return <div className="rounded border border-[var(--coral)] p-2 text-[11px]" style={{ color: 'var(--coral)' }}>{e}</div>
 }
@@ -94,6 +109,7 @@ export function ResponsePanel(props: {
         >
           {props.planBusy ? 'Incident Commander analysing…' : cat === 0 ? 'Select a hurricane category' : 'Generate response plan'}
         </button>
+        {props.planBusy && <Progress />}
         {props.planErr && <div className="mt-2"><Err e={props.planErr} /></div>}
         {plan && (
           <div className="mt-3 space-y-2 text-xs">
@@ -137,7 +153,7 @@ export function ResponsePanel(props: {
             {plan.validation.rejected.length > 0 && (
               <div className="text-[10px]" style={{ color: 'var(--amber)' }}>Backend rejected {plan.validation.rejected.length} item(s) from the model output: {plan.validation.rejected.map((r) => r.reason).join(', ')}</div>
             )}
-            <div className="rounded p-2" style={{ background: 'rgba(34,211,238,.06)' }}>
+            <div id="verified-block" className="rounded p-2" style={{ background: 'rgba(34,211,238,.06)' }}>
               <div className="label mb-1">Independently verified by NetworkX (not by Gemma)</div>
               <MetricsBars base={plan.verified.evaluate.baseline} now={plan.verified.evaluate.intervention} />
               <div className="label mt-2 mb-1">Zone impact of this plan · any-care nodes</div>
@@ -162,7 +178,10 @@ export function ResponsePanel(props: {
       <Section title="Hypothetical staging candidates" right={<Badge tone="amber">hypothetical</Badge>}>
         {!candidates && <div className="text-[11px]" style={{ color: 'var(--mute)' }}>Loading…</div>}
         <ul className="space-y-1.5">
-          {candidates?.map((c) => {
+          {candidates && [...candidates].sort((a, b) => {
+            const g = (id: string) => evalRes?.per_candidate.find((p) => p.id === id)?.marginal.nodes_with_any_care_route ?? 0
+            return g(b.id) - g(a.id) || a.id.localeCompare(b.id)
+          }).map((c) => {
             const on = applied.includes(c.id)
             const rec = props.recommended.includes(c.id)
             const alone = evalRes?.per_candidate.find((p) => p.id === c.id)
@@ -175,7 +194,12 @@ export function ResponsePanel(props: {
                 <div className="mono mt-0.5 text-[10px]" style={{ color: 'var(--mute)' }}>
                   {c.zone_id.replace(/_/g, ' ')} · snap {fmt(c.snap_distance_m)} m {rec && <span style={{ color: 'var(--cyan)' }}>· plan pick</span>}
                 </div>
-                {alone && <div className="mono mt-0.5 text-[10px]" style={{ color: 'var(--mute)' }}>alone: +{fmt(alone.marginal.nodes_with_any_care_route ?? 0)} nodes with a care route (simulated)</div>}
+                {alone && (
+                  <div className="mono mt-0.5 text-[10px]" style={{ color: (alone.marginal.nodes_with_any_care_route ?? 0) <= 3 && cat > 0 ? 'var(--amber)' : 'var(--mute)' }}>
+                    alone: +{fmt(alone.marginal.nodes_with_any_care_route ?? 0)} nodes with a care route (simulated)
+                    {(alone.marginal.nodes_with_any_care_route ?? 0) <= 3 && cat > 0 ? ' · cut off by closures at this category' : ''}
+                  </div>
+                )}
               </li>
             )
           })}

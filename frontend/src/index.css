@@ -20,4 +20,6 @@ body { font-family: 'IBM Plex Sans', system-ui, sans-serif; overflow: hidden; }
 .maplibregl-ctrl-group { background: var(--panel) !important; border: 1px solid var(--line); }
 .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1); }
 ::-webkit-scrollbar { width: 6px } ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px }
+@keyframes slide { 0% { transform: translateX(-100%) } 100% { transform: translateX(300%) } }
+.indeterminate { animation: slide 1.3s ease-in-out infinite }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

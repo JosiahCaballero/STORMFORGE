@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AgentsPanel, Badge, ResponsePanel, ZonePanel } from './components/Panels'
-import { api, type Candidate, type EvalResult, type PlanResponse, type PlanStatus, type Zone } from './lib/api'
+import { api, type Candidate, type EvalResult, type PlanResponse, type PlanStatus, type Reach, type Zone } from './lib/api'
+import { DemoCoach, STEP_META, Welcome, type DemoCtx } from './components/DemoCoach'
 import MapView, { type FlyApi, type Selection } from './components/MapView'
 import {
   CATS, computeStats, depthLabel, isArterial, roadStatus, type RoadState,
@@ -167,13 +168,7 @@ type Tab = 'impact' | 'zones' | 'response' | 'agents'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'impact', label: 'Impact' }, { id: 'zones', label: 'Zones' }, { id: 'agents', label: 'Modules' }, { id: 'response', label: 'Response' },
 ]
-const STEPS: { n: number; label: string; tab: Tab; cat?: Cat }[] = [
-  { n: 1, label: 'Select storm', tab: 'impact', cat: 3 },
-  { n: 2, label: 'Inspect communities', tab: 'zones' },
-  { n: 3, label: 'Module findings', tab: 'agents' },
-  { n: 4, label: 'Gemma plan', tab: 'response' },
-  { n: 5, label: 'Apply & verify', tab: 'response' },
-]
+const STEP_TAB: Tab[] = ['impact', 'zones', 'agents', 'response', 'response']
 
 export default function App() {
   const [cat, setCat] = useState<Cat>(3)
@@ -201,6 +196,10 @@ export default function App() {
   const [planStatus, setPlanStatus] = useState<PlanStatus | null>(null)
   const [agentOpen, setAgentOpen] = useState<string | null>('medical')
   const [backendDown, setBackendDown] = useState(false)
+  const [step, setStep] = useState(1)
+  const [demo, setDemo] = useState(false)
+  const [welcome, setWelcome] = useState(() => { try { return localStorage.getItem('sf_welcomed') !== '1' } catch { return true } })
+  const [reach, setReach] = useState<Reach | null>(null)
   const fly = useRef<FlyApi | null>(null)
 
   useEffect(() => {
@@ -222,6 +221,21 @@ export default function App() {
   useEffect(() => { setPlan(null); setPlanErr(null) }, [cat])
 
   useEffect(() => {
+    let dead = false
+    if (!applied.length) { setReach(null); return }
+    api.reach(cat, applied).then((r) => !dead && setReach(r)).catch(() => !dead && setReach(null))
+    return () => { dead = true }
+  }, [cat, applied])
+
+  // demo step 5: frame the applied sites and the nodes that gained a route
+  useEffect(() => {
+    if (!demo || step !== 5 || !reach || !reach.sites.length) return
+    const pts: [number, number][] = [...reach.sites.map((s) => [s.lon, s.lat] as [number, number]), ...reach.gained.filter((_, i) => i % 6 === 0)]
+    fly.current?.fit(pts)
+    setTimeout(() => document.getElementById('verified-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 600)
+  }, [demo, step, reach])
+
+  useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement && /INPUT|TEXTAREA/.test(e.target.tagName)) return
       if (/^[0-5]$/.test(e.key)) setCat(Number(e.key) as Cat)
@@ -236,19 +250,48 @@ export default function App() {
   const toggle = (id: string) => setApplied((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]))
   const recommended = plan?.plan.recommended_ids ?? []
 
-  async function generate() {
+  async function generate(): Promise<PlanResponse | null> {
     setPlanBusy(true); setPlanErr(null)
-    try { setPlan(await api.generatePlan(cat, 3)) } catch (e) { setPlanErr(String(e)) } finally { setPlanBusy(false) }
+    try { const r = await api.generatePlan(cat, 3); setPlan(r); return r } catch (e) { setPlanErr(String(e)); return null } finally { setPlanBusy(false) }
   }
   const focusCandidate = (c: Candidate) => fly.current?.to(c.lon, c.lat, 15.8)
-  const step = (st: (typeof STEPS)[number]) => { if (st.cat !== undefined) setCat(st.cat); setTab(st.tab); setRightOpen(true) }
+  const selectZone = (id: string | null) => {
+    setZoneSel(id)
+    const z = id ? zones?.find((x) => x.id === id) : null
+    if (z) fly.current?.to(z.center[0], z.center[1], 15.2)
+  }
+
+  /** Perform the actions of a step. `auto` = inside the guided demo (may call the planner). */
+  async function runStep(n: number, auto: boolean) {
+    setStep(n); setTab(STEP_TAB[n - 1]); setRightOpen(true)
+    if (n === 1) {
+      setCat(3); setApplied([]); setPlan(null); setPlanErr(null); setZoneSel(null); setSelected(null); setLeftOpen(true); fly.current?.home()
+    } else if (n === 2) {
+      setApplied([]); selectZone('historic_downtown')
+    } else if (n === 3) {
+      setAgentOpen('medical'); fly.current?.home()
+    } else if (n === 4) {
+      if (auto && !plan && !planBusy) void generate()
+    } else if (n === 5) {
+      if (!auto) return
+      const pl = plan ?? (await generate())
+      if (pl) setApplied(pl.plan.recommended_ids)
+    }
+  }
+  const startDemo = () => { setWelcome(false); try { localStorage.setItem('sf_welcomed', '1') } catch { /* ignore */ } setDemo(true); void runStep(1, true) }
+  const skipWelcome = () => { setWelcome(false); try { localStorage.setItem('sf_welcomed', '1') } catch { /* ignore */ } }
+  const demoCtx: DemoCtx = {
+    cat, closedPct: s && cat ? s.closedPct : null, hospitalNodesPct: access && cat ? access[cat].nodes_with_route_pct : null,
+    hospitalOrigins: access ? `${access[cat].origins_with_route}/${access[cat].origins_sampled}` : null,
+    plan, planBusy, planErr, evalRes, candidates, gainedNodes: reach?.counts.gained_nodes ?? null,
+  }
 
   return (
     <div className="relative h-full w-full overflow-hidden">
       <MapView
         cat={cat} showLocal={showLocal} showBridges={showBridges} facility={facility} selected={selected} onSelect={setSelected} flyRef={fly} onBasemap={setBasemap}
-        zones={zones} zoneSel={zoneSel} onZone={(id) => { setZoneSel(id); if (id) { setTab('zones'); setRightOpen(true) } }}
-        candidates={candidates} applied={applied} recommended={recommended} onCandidate={toggle}
+        zones={zones} zoneSel={zoneSel} onZone={(id) => { setZoneSel(id); if (id) { setTab('zones'); setStep(2); setRightOpen(true) } }}
+        candidates={candidates} applied={applied} recommended={recommended} onCandidate={toggle} reach={reach}
       />
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 55%, rgba(6,10,19,.7) 100%)' }} />
 
@@ -258,13 +301,14 @@ export default function App() {
           <div className="text-[10px] tracking-wide" style={{ color: 'var(--mute)' }}>Critical Access Intelligence · St. Augustine, FL</div>
         </div>
         <nav className="hidden flex-1 items-center justify-center gap-1 lg:flex" aria-label="Demo flow">
-          {STEPS.map((st) => (
-            <button key={st.n} onClick={() => step(st)} className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] hover:bg-white/5" style={{ color: tab === st.tab ? 'var(--cyan)' : 'var(--mute)' }}>
-              <span className="mono grid h-4 w-4 place-items-center rounded-full border text-[9px]" style={{ borderColor: 'currentColor' }}>{st.n}</span>{st.label}
+          {STEP_META.map((st) => (
+            <button key={st.n} onClick={() => void runStep(st.n, demo)} aria-current={step === st.n ? 'step' : undefined} className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] whitespace-nowrap hover:bg-white/5" style={{ color: step === st.n ? 'var(--cyan)' : 'var(--mute)', background: step === st.n ? 'rgba(34,211,238,.08)' : undefined }}>
+              <span className="mono grid h-4 w-4 place-items-center rounded-full border text-[9px]" style={{ borderColor: 'currentColor' }}>{st.n}</span>{st.short}
             </button>
           ))}
         </nav>
-        <span className="rounded border px-2 py-1 text-[10px] tracking-wider uppercase" style={{ borderColor: 'var(--amber)', color: 'var(--amber)' }}>Educational simulator · not for emergency decisions</span>
+        <button onClick={startDemo} className="rounded px-3 py-1 text-xs font-semibold whitespace-nowrap" style={{ background: 'linear-gradient(90deg,#0e7490,#6d28d9)', color: 'white' }}>▶ Guided demo</button>
+        <span className="rounded border px-2 py-1 text-[10px] tracking-wider whitespace-nowrap uppercase" style={{ borderColor: 'var(--amber)', color: 'var(--amber)' }}><span className="hidden xl:inline">Educational simulator · </span>Not for emergency decisions</span>
         <button onClick={() => setMethod(true)} className="rounded border border-[var(--line)] px-3 py-1 text-xs hover:bg-white/5">Methodology</button>
       </header>
 
@@ -340,7 +384,7 @@ export default function App() {
             <div className="panel p-3 text-xs" style={{ color: err ? 'var(--coral)' : 'var(--mute)' }}>{err ?? 'Loading NOAA-derived road exposure…'}</div>
           ))}
 
-          {tab === 'zones' && <ZonePanel zones={zones} sel={zoneSel} onSel={setZoneSel} cat={cat} applied={applied} />}
+          {tab === 'zones' && <ZonePanel zones={zones} sel={zoneSel} onSel={selectZone} cat={cat} applied={applied} />}
           {tab === 'agents' && <AgentsPanel cat={cat} applied={applied} plan={plan} open={agentOpen} setOpen={setAgentOpen} />}
           {tab === 'response' && (
             <ResponsePanel
@@ -356,6 +400,8 @@ export default function App() {
         <span>Hazard: NOAA NHC SLOSH MOM v4 (Jun 2026) · Roads: © OpenStreetMap contributors{basemap === false ? ' · basemap offline (roads-only mode)' : ' · basemap © CARTO'} · Zones &amp; staging sites are hypothetical demo constructs</span>
       </footer>
       {method && <Method onClose={() => setMethod(false)} />}
+      {demo && <DemoCoach step={step} ctx={demoCtx} onBack={() => void runStep(Math.max(1, step - 1), true)} onNext={() => void runStep(Math.min(5, step + 1), true)} onExit={() => setDemo(false)} />}
+      {welcome && <Welcome onStart={startDemo} onSkip={skipWelcome} />}
     </div>
   )
 }

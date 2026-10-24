@@ -5,7 +5,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 
 maplibregl.setWorkerUrl(workerUrl)
 import { ARTERIAL, type Cat, type Facility, type RoadProps } from '../lib/data'
-import type { Candidate, Zone } from '../lib/api'
+import type { Candidate, Reach, Zone } from '../lib/api'
 
 export type Selection =
   | { kind: 'road'; props: RoadProps; lngLat: [number, number] }
@@ -15,6 +15,7 @@ export type Selection =
 export interface FlyApi {
   home: () => void
   to: (lng: number, lat: number, z?: number) => void
+  fit: (pts: [number, number][]) => void
 }
 
 const HOME = { center: [-81.3095, 29.8895] as [number, number], zoom: 14.1, pitch: 28, bearing: -12 }
@@ -65,6 +66,7 @@ interface Props {
   applied: string[]
   recommended: string[]
   onCandidate: (id: string) => void
+  reach: Reach | null
 }
 
 function applyCat(map: maplibregl.Map, k: Cat, local: boolean, bridges: boolean) {
@@ -83,7 +85,7 @@ function applyCat(map: maplibregl.Map, k: Cat, local: boolean, bridges: boolean)
   map.setLayoutProperty('bridges', 'visibility', vis(bridges))
 }
 
-export default function MapView({ cat, showLocal, showBridges, facility, selected, onSelect, flyRef, onBasemap, zones, zoneSel, onZone, candidates, applied, recommended, onCandidate }: Props) {
+export default function MapView({ cat, showLocal, showBridges, facility, selected, onSelect, flyRef, onBasemap, zones, zoneSel, onZone, candidates, applied, recommended, onCandidate, reach }: Props) {
   const el = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const ready = useRef(false)
@@ -131,8 +133,18 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
       el.textContent = z.name + (z.kind === 'infrastructure' ? ' ⌁' : '')
       el.style.cssText = `font:600 10px/1 IBM Plex Sans,sans-serif;letter-spacing:.12em;text-transform:uppercase;padding:3px 6px;border-radius:4px;border:1px solid ${z.id === zoneSel ? '#22d3ee' : 'rgba(94,234,212,.35)'};background:rgba(6,10,19,.72);color:${z.id === zoneSel ? '#22d3ee' : '#9fe9dc'};cursor:pointer;pointer-events:auto`
       el.onclick = (ev) => { ev.stopPropagation(); onZone(z.id === latestAll.current.zoneSel ? null : z.id) }
-      return new maplibregl.Marker({ element: el }).setLngLat(z.center).addTo(map)
+      const anchor = z.id === 'bridge_corridor' ? 'left' : z.id === 'historic_downtown' ? 'right' : 'center'
+      return new maplibregl.Marker({ element: el, anchor }).setLngLat(z.center).addTo(map)
     })
+  }
+
+  const reachRef = useRef<Reach | null>(reach)
+  reachRef.current = reach
+  function syncReach(map: maplibregl.Map) {
+    const r = reachRef.current
+    const fc = (pts: number[][]) => ({ type: 'FeatureCollection' as const, features: pts.map((c) => ({ type: 'Feature' as const, properties: {}, geometry: { type: 'Point' as const, coordinates: c } })) })
+    ;(map.getSource('reach-gain') as maplibregl.GeoJSONSource | undefined)?.setData(fc(r?.gained ?? []))
+    ;(map.getSource('reach-base') as maplibregl.GeoJSONSource | undefined)?.setData(fc(r && r.candidate_ids.length ? r.baseline_care : []))
   }
 
   function syncCandidates(map: maplibregl.Map) {
@@ -163,6 +175,12 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
       flyRef.current = {
         home: () => map.flyTo({ ...HOME, duration: 1600, essential: true }),
         to: (lng, lat, z = 15.5) => map.flyTo({ center: [lng, lat], zoom: z, pitch: 35, duration: 1600, essential: true }),
+        fit: (pts) => {
+          if (!pts.length) return
+          const b = new maplibregl.LngLatBounds(pts[0], pts[0])
+          pts.forEach((q) => b.extend(q))
+          map.fitBounds(b, { padding: { left: 300, right: 340, top: 110, bottom: 170 }, maxZoom: 15.2, pitch: 25, duration: 1800, essential: true })
+        },
       }
       map.on('load', () => {
         map.addSource('roads', { type: 'geojson', data: '/data/roads.geojson', promoteId: 'id' })
@@ -189,6 +207,8 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
         line('roads-hover', { 'line-color': '#ffffff', 'line-width': W(3, 8), 'line-opacity': 0.9 }, NONE)
         line('roads-selected', { 'line-color': '#22d3ee', 'line-width': W(4, 10), 'line-opacity': 1 }, NONE)
         line('roads-hit', { 'line-color': '#000000', 'line-width': 14, 'line-opacity': 0 })
+        map.addSource('reach-gain', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        map.addSource('reach-base', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
         map.addSource('zones', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
         map.addLayer({ id: 'zones-fill', type: 'fill', source: 'zones', paint: { 'fill-color': '#22d3ee', 'fill-opacity': ['case', ['==', ['get', 'sel'], 1], 0.12, 0] } }, 'roads-local')
         map.addLayer({ id: 'zones-line', type: 'line', source: 'zones', paint: { 'line-color': ['case', ['==', ['get', 'sel'], 1], '#22d3ee', '#5eead4'], 'line-width': ['case', ['==', ['get', 'sel'], 1], 2.2, 1.1], 'line-dasharray': [3, 2], 'line-opacity': ['case', ['==', ['get', 'sel'], 1], 0.9, 0.18] } }, 'roads-local')
@@ -196,6 +216,10 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
           id: 'snap-line', type: 'line', source: 'snap',
           paint: { 'line-color': '#fbbf24', 'line-width': 2, 'line-dasharray': [1, 1.5] },
         })
+
+        map.addLayer({ id: 'reach-base', type: 'circle', source: 'reach-base', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2, 17, 6], 'circle-color': '#22d3ee', 'circle-opacity': 0.85, 'circle-stroke-width': 1, 'circle-stroke-color': '#06202a' } })
+        map.addLayer({ id: 'reach-glow', type: 'circle', source: 'reach-gain', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 6, 17, 16], 'circle-color': '#4ade80', 'circle-opacity': 0.16, 'circle-blur': 0.8 } })
+        map.addLayer({ id: 'reach-gain', type: 'circle', source: 'reach-gain', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 1.8, 17, 5], 'circle-color': '#4ade80', 'circle-opacity': 0.95, 'circle-stroke-width': 0.8, 'circle-stroke-color': '#052e16' } })
 
         map.on('mousemove', 'roads-hit', (e) => {
           map.getCanvas().style.cursor = 'pointer'
@@ -221,6 +245,7 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
         syncFacility(map, l.facility)
         syncZones(map)
         syncCandidates(map)
+        syncReach(map)
       })
     })
     return () => {
@@ -251,6 +276,12 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
     if (map && ready.current) syncZones(map)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zones, zoneSel])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && ready.current) syncReach(map)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reach])
 
   useEffect(() => {
     const map = mapRef.current

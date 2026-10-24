@@ -22,10 +22,10 @@ Legend: ✅ done+verified · 🔧 in progress · ⬜ not started · ⚠ blocked
 ## P4 Gemma planner — ✅ verified live (gemma-4-26b-a4b-it, thinkingLevel=minimal, ~7-10 s). Evidence now has sequential marginals (recomputed after each pick), per-zone impact of the greedy plan; validator rejects redundant sites (<5 new nodes) and zone claims contradicting the recommended set; response carries backend `sequential_marginals` + `zone_impact`
 ## P5 Agent modules — ✅ 4 deterministic modules + UI tab; transit marked planned
 ## P6 Zones — ✅ 6 provisional zones (hull boundaries, bridge corridor has no polygon), zone impact panel
-## P7 UI — 🔧 tabs, collapsible panels, candidates apply/remove, plan panel, demo nav done; remaining: guided demo script/video flow, loading/error polish, README
+## P7 UI — ✅ browser-tested (scripts/e2e: 0 problems at 1440x900 and 1366x768): tabs, collapsible panels, zones, modules, apply/remove, plan, welcome + 5-step guided demo coach with live numbers, gained-node map layer (/api/v1/interventions/reach), camera framing, plan progress state, candidate ranking + cut-off flags. Remaining: record 3-min video (docs/DEMO.md), deploy, README polish
 
 ## Test status
-backend `python -m pytest -q` 94 passed; frontend `npx vitest run` 7 passed.
+backend `python -m pytest -q` 97 passed; frontend `npx vitest run` 7 passed.
 
 ## Decisions log
 - Original 100-origin sample unrecoverable; deterministic 102-origin sample (every 18th node by sorted id).

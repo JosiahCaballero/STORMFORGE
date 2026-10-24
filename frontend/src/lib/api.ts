@@ -77,6 +77,15 @@ export interface AgentReport {
   transit: { status: string; note: string }
 }
 
+export interface Reach {
+  category: number
+  candidate_ids: string[]
+  counts: { baseline_any_care_nodes: number; after_any_care_nodes: number; gained_nodes: number }
+  gained: [number, number][]
+  baseline_care: [number, number][]
+  sites: { id: string; lon: number; lat: number }[]
+}
+
 export interface PlanStatus { provider: string; configured: boolean; model: string | null; fallback_available: boolean }
 export interface PlanResponse {
   category: number
@@ -118,6 +127,8 @@ export const api = {
     post('/api/v1/interventions/evaluate', { category, candidate_ids }).then(j<EvalResult>),
   report: (category: number, ids: string[]) =>
     fetch(`/api/v1/agents/report?category=${category}&candidate_ids=${ids.join(',')}`).then(j<AgentReport>),
+  reach: (category: number, ids: string[]) =>
+    fetch(`/api/v1/interventions/reach?category=${category}&candidate_ids=${ids.join(',')}`).then(j<Reach>),
   planStatus: () => fetch('/api/v1/plan/status').then(j<PlanStatus>),
   generatePlan: (category: number, max_candidates = 3) =>
     post('/api/v1/plan/generate', { category, max_candidates }).then(j<PlanResponse>),

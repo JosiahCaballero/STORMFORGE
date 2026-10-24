@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api_plan import router as plan_router
 from .api_sim import router as sim_router
+from .api_viz import router as viz_router
 from .engine import CATS, Engine
 
 app = FastAPI(title="STORMFORGE API", version="0.1.0")
@@ -17,6 +18,7 @@ app.add_middleware(
 engine = Engine.load()
 app.include_router(sim_router)
 app.include_router(plan_router)
+app.include_router(viz_router)
 
 ATTRIBUTION = [
     "Hazard: NOAA NHC National Storm Surge Risk Maps v4, SLOSH MOM HIGH-tide inundation (June 2026 reprocessing), Categories 1-5",
