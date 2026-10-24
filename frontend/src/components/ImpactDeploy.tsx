@@ -31,22 +31,24 @@ export function ImpactTab({ setup, result, zoneSel, onSelect, onDeploy, loading,
             const col = z.cut_off_pct >= 60 ? 'var(--coral)' : z.cut_off_pct >= 20 ? 'var(--amber)' : '#4ade80'
             return (
               <li key={z.zone_id}>
-                <button onClick={() => onSelect(z.zone_id)} aria-pressed={on} className="w-full rounded-lg border px-2.5 py-1.5 text-left transition-colors hover:bg-white/5" style={{ borderColor: on ? 'var(--cyan)' : 'var(--line)', background: on ? 'rgba(34,211,238,.09)' : undefined }}>
+                <button onClick={() => onSelect(z.zone_id)} aria-pressed={on} className="w-full rounded-lg border px-2.5 py-1 text-left transition-colors hover:bg-white/5" style={{ borderColor: on ? 'var(--cyan)' : 'var(--line)', background: on ? 'rgba(34,211,238,.09)' : undefined }}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[13px] font-semibold"><span className="mono mr-1.5 text-[10px]" style={{ color: 'var(--mute)' }}>{i + 1}</span>{z.name}</span>
                     {z.debris_blocked > 0 && <span className="rounded px-1.5 py-px text-[10px]" style={{ color: 'var(--amber)', background: 'rgba(251,191,36,.12)' }}>{z.debris_blocked} debris</span>}
                   </div>
-                  <div className="mt-1 h-1 overflow-hidden rounded-full" style={{ background: '#141d33' }}><div className="h-full rounded-full" style={{ width: `${Math.max(2, z.cut_off_pct)}%`, background: col }} /></div>
-                  <div className="mt-1 text-[11px]" style={{ color: 'var(--mute)' }}>{cutOffLine(z)}</div>
+                  <div className="mt-0.5 h-1 overflow-hidden rounded-full" style={{ background: '#141d33' }}><div className="h-full rounded-full" style={{ width: `${Math.max(2, z.cut_off_pct)}%`, background: col }} /></div>
+                  <div className="mt-0.5 text-[11px]" style={{ color: 'var(--mute)' }}>{cutOffLine(z)}</div>
                 </button>
               </li>
             )
           })}
         </ol>
       </div>
-      <button onClick={onDeploy} disabled={!sel} className={primaryBtn} style={primaryBg}>
-        {sel ? `Send resources to ${sel.name} →` : 'Select a neighborhood to send resources'}
-      </button>
+      <div className="sticky -bottom-3 -mx-3.5 -mb-3 px-3.5 pt-2 pb-3" style={{ background: 'linear-gradient(180deg, transparent, #0b1120 25%)' }}>
+        <button onClick={onDeploy} disabled={!sel} className={`${primaryBtn} w-full`} style={primaryBg}>
+          {sel ? `Send resources to ${sel.name} →` : 'Select a neighborhood to send resources'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -129,7 +131,7 @@ export function DeployTab({ setup, result, hints, assign, zoneSel, onSelect, onD
         </div>
       )}
 
-      <Section title={`Assigned units (${assign.length})`} defaultOpen={assign.length > 0} badge={gemmaApplied ? <span className="rounded px-1.5 py-px text-[10px]" style={{ background: 'rgba(34,211,238,.15)', color: 'var(--cyan)' }}>Gemma plan</span> : undefined}>
+      <Section key={assign.length > 0 ? 'open' : 'shut'} title={`Assigned units (${assign.length})`} defaultOpen={assign.length > 0} badge={gemmaApplied ? <span className="rounded px-1.5 py-px text-[10px]" style={{ background: 'rgba(34,211,238,.15)', color: 'var(--cyan)' }}>Gemma plan</span> : undefined}>
         {assign.length === 0 ? <div style={{ color: 'var(--mute)' }}>Nothing assigned yet.</div> : (
           <ul className="flex flex-col gap-1.5">
             {rows.map((r) => {

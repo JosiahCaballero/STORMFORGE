@@ -41,7 +41,7 @@ export function CompareTab({ setup, mineRes, gemmaRes, cmp, plan, planBusy, plan
       {planBusy && (
         <div role="status" className="rounded-lg px-3 py-2 text-[12px]" style={{ background: 'rgba(34,211,238,.08)' }}>
           <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 align-[-2px]" style={{ borderColor: 'var(--cyan)', borderTopColor: 'transparent' }} />
-          Gemma is choosing where to send the 11 units. The road-network model then checks every number. This takes about 10–30 seconds.
+          Gemma is choosing where to send the 11 units. The road-network model then checks every number. This usually takes 15–30 seconds; please keep this tab open.
         </div>
       )}
       {planErr && !planBusy && <div className="rounded-lg px-3 py-2 text-[12px]" style={{ background: 'rgba(251,191,36,.1)', color: 'var(--amber)' }}>Planner unavailable: {planErr}. You can still adjust your own plan in Deploy.</div>}
@@ -68,7 +68,7 @@ export function CompareTab({ setup, mineRes, gemmaRes, cmp, plan, planBusy, plan
               <tr key={r.label} className="border-t" style={{ borderColor: 'rgba(255,255,255,.06)' }}>
                 <td className="py-1 pr-2 text-[12px]">{r.label}</td>
                 <Cell v={r.mine === null ? (mineLoading ? '…' : null) : r.unit ? `${r.mine} ${r.unit}` : r.mine} best={have && r.hi && r.mine! > r.gem!} />
-                <Cell v={r.gem} best={have && r.hi && r.gem! > r.mine!} na={!plan} />
+                <Cell v={r.gem !== null && r.unit ? `${r.gem} ${r.unit}` : r.gem} best={have && r.hi && r.gem! > r.mine!} na={!plan} />
               </tr>
             )
           })}

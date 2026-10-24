@@ -23,3 +23,5 @@ body { font-family: 'IBM Plex Sans', system-ui, sans-serif; overflow: hidden; }
 @keyframes slide { 0% { transform: translateX(-100%) } 100% { transform: translateX(300%) } }
 .indeterminate { animation: slide 1.3s ease-in-out infinite }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@keyframes toastin { from { opacity: 0; transform: translate(-50%, -8px) } to { opacity: 1; transform: translate(-50%, 0) } }
+.toast-in { animation: toastin .25s ease-out }

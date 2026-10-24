@@ -259,7 +259,7 @@ export default function MapView(props: Props) {
         line('roads-art', { 'line-color': '#41577f', 'line-width': W(1, 4.5) }, isArt as Filt)
         line('exp-local', { 'line-color': '#38bdf8', 'line-width': W(0.5, 2), 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0.18, 16, 0.6] }, NONE, { minzoom: 13.6 })
         line('closed-local', { 'line-color': '#fb5d73', 'line-width': W(0.5, 2.2), 'line-opacity': ['interpolate', ['linear'], ['zoom'], 13.6, 0.12, 16, 0.55], 'line-dasharray': [1.5, 1.2] }, NONE, { minzoom: 13.6 })
-        line('closed-art-casing', { 'line-color': '#fb5d73', 'line-width': W(6, 14), 'line-opacity': 0.85, 'line-blur': 1.2 }, NONE)
+        line('closed-art-casing', { 'line-color': '#fb5d73', 'line-width': W(5, 11), 'line-opacity': 0.6, 'line-blur': 1.2 }, NONE)
         line('exp-art', { 'line-color': '#38bdf8', 'line-width': W(1, 3.2) }, NONE)
 
         // dim everything outside the selected region (above roads, below overlays)

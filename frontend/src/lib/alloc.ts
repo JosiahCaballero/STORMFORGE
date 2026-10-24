@@ -156,3 +156,10 @@ export const ZONE_SHORT: Record<string, string> = {
   historic_downtown: 'Historic Downtown', lincolnville: 'Lincolnville', davis_shores: 'Davis Shores',
   uptown_san_marco: 'Uptown / San Marco', west_augustine: 'West Augustine', bridge_corridor: 'Bridge Corridor',
 }
+
+/** Demo region: West Augustine when a debris crew is useful there (verified for Cat 3), else the most-cut-off region that has eligible debris. */
+export function pickDemoZone(setup: { attention_order: string[] }, hints: ActionHint[]): string | null {
+  const ok = (id: string) => hints.some((h) => h.resource === 'debris_crew' && h.zone_id === id && h.valid)
+  if (ok('west_augustine')) return 'west_augustine'
+  return setup.attention_order.find(ok) ?? null
+}

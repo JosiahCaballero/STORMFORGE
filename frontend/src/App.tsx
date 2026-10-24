@@ -1,407 +1,385 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { AgentsPanel, Badge, ResponsePanel, ZonePanel } from './components/Panels'
-import { api, type Candidate, type EvalResult, type PlanResponse, type PlanStatus, type Reach, type Zone } from './lib/api'
-import { DemoCoach, STEP_META, Welcome, type DemoCtx } from './components/DemoCoach'
-import MapView, { type FlyApi, type Selection } from './components/MapView'
-import {
-  CATS, computeStats, depthLabel, isArterial, roadStatus, type RoadState,
-  type Cat, type CatStats, type Facility, type RoadCollection,
-} from './lib/data'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, ApiError, type ActionHint, type AllocationResult, type Assignment, type Compared, type GemmaPlan, type PlacedAssignment, type ResourceId, type Setup, type ZoneGeo } from './lib/api'
+import { layersFor, moveTo, pctCutOff, pickDemoZone, removeAt, RES, sameAllocation, type LayerKey } from './lib/alloc'
+import { CATS, edgeGeometry, edgesInfo, type Cat, type EdgeGeo, type Facility, type RoadCollection } from './lib/data'
+import MapView, { type FlyApi } from './components/MapView'
+import { ImpactTab, DeployTab } from './components/ImpactDeploy'
+import { CompareTab } from './components/CompareTab'
+import { DemoCoach, Welcome } from './components/DemoCoach'
+import { HowItWorks } from './components/HowItWorks'
+import { LayerControl } from './components/LayerControl'
 
-const fmt = (n: number, d = 0) => n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d })
+type Tab = 'impact' | 'deploy' | 'compare'
+const TABS: { id: Tab; label: string }[] = [{ id: 'impact', label: 'Impact' }, { id: 'deploy', label: 'Deploy' }, { id: 'compare', label: 'Compare' }]
+const DEFAULT_LAYERS: LayerKey[] = ['flood', 'debris']
+const COVER: LayerKey[] = ['ems', 'supply', 'water', 'heli', 'medical']
+const PANEL_W = 384
+const STORED = 'sf_welcomed'
 
-function Kpi({ label, value, unit, sub, tone }: { label: string; value: string; unit?: string; sub?: string; tone?: 'coral' | 'cyan' | 'amber' }) {
-  const color = tone === 'coral' ? 'var(--coral)' : tone === 'amber' ? 'var(--amber)' : tone === 'cyan' ? 'var(--cyan)' : 'var(--ink)'
-  return (
-    <div className="panel px-3 py-2.5">
-      <div className="label">{label}</div>
-      <div className="mono mt-1 text-[26px] leading-none font-semibold transition-colors" style={{ color }}>
-        {value}
-        {unit && <span className="ml-1 text-xs font-normal" style={{ color: 'var(--mute)' }}>{unit}</span>}
-      </div>
-      {sub && <div className="mt-1.5 text-[11px] leading-snug" style={{ color: 'var(--mute)' }}>{sub}</div>}
-    </div>
-  )
+interface Toast { id: number; text: string; tone: 'ok' | 'warn' }
+
+const errText = (e: unknown) => {
+  if (e instanceof ApiError) return e.status === 404 ? 'the Gemma planner is not available on this server' : e.status === 429 ? 'please wait a moment and try again' : e.message
+  if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'the request took too long'
+  return e instanceof Error ? e.message : String(e)
 }
-
-function Toggle({ on, onChange, children }: { on: boolean; onChange: (v: boolean) => void; children: React.ReactNode }) {
-  return (
-    <button role="switch" aria-checked={on} onClick={() => onChange(!on)} className="flex w-full items-center gap-2 py-1 text-left text-xs">
-      <span className="relative h-4 w-7 rounded-full transition-colors" style={{ background: on ? 'var(--cyan)' : '#27324d' }}>
-        <span className="absolute top-0.5 h-3 w-3 rounded-full bg-[#060a13] transition-all" style={{ left: on ? 14 : 2 }} />
-      </span>
-      {children}
-    </button>
-  )
-}
-
-function Legend() {
-  const ramp = 'linear-gradient(90deg,#7dd3fc,#38bdf8,#6366f1,#a855f7,#e879f9,#fdf4ff)'
-  return (
-    <div className="panel p-3">
-      <div className="label mb-2">Legend</div>
-      <div className="h-2 rounded-full" style={{ background: ramp }} />
-      <div className="mono mt-1 flex justify-between text-[10px]" style={{ color: 'var(--mute)' }}>
-        <span>shallow</span><span>NOAA depth bin</span><span>&gt;20 ft</span>
-      </div>
-      <ul className="mt-3 space-y-1.5 text-[11px]">
-        <li className="flex items-center gap-2"><i className="inline-block h-1 w-6 rounded" style={{ background: 'var(--coral)', boxShadow: '0 0 8px var(--coral)' }} />Illustrative closure — major road</li>
-        <li className="flex items-center gap-2"><i className="inline-block w-6 border-t-2 border-dashed" style={{ borderColor: 'var(--coral)' }} />Illustrative closure — local street</li>
-        <li className="flex items-center gap-2"><i className="inline-block w-6 border-t-2 border-dotted" style={{ borderColor: 'var(--amber)' }} />OSM bridge (exempt from rule)</li>
-        <li className="flex items-center gap-2"><i className="inline-block h-1 w-6 rounded" style={{ background: '#41577f' }} />Open / not exposed</li>
-      </ul>
-    </div>
-  )
-}
-
-interface Access { category: number; nodes_with_route_pct: number; origins_with_route: number; origins_sampled: number }
-
-function Compare({ all, cat, onPick, access }: { all: CatStats[]; cat: Cat; onPick: (c: Cat) => void; access: Access[] | null }) {
-  const [mode, setMode] = useState<'roads' | 'access'>('roads')
-  const val = (id: Cat) => (mode === 'roads' || !access ? all[id].closedPct : access[id].nodes_with_route_pct)
-  return (
-    <div className="panel p-3">
-      <div className="mb-2 flex gap-1.5">
-        {(['roads', 'access'] as const).map((m) => (
-          <button key={m} onClick={() => setMode(m)} className="rounded px-2 py-0.5 text-[10px] tracking-wider uppercase" style={{ background: mode === m ? 'rgba(34,211,238,.14)' : 'transparent', color: mode === m ? 'var(--cyan)' : 'var(--mute)' }}>
-            {m === 'roads' ? 'Roads closed' : 'Route to hospital*'}
-          </button>
-        ))}
-      </div>
-      <div className="space-y-1">
-        {CATS.map((c) => {
-          const s = { closedPct: val(c.id) }
-          const on = c.id === cat
-          return (
-            <button key={c.id} onClick={() => onPick(c.id)} className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/5" aria-label={`${c.label}: ${fmt(s.closedPct, 1)} percent`}>
-              <span className="mono w-11 text-[10px]" style={{ color: on ? 'var(--cyan)' : 'var(--mute)' }}>{c.short}</span>
-              <span className="h-2.5 flex-1 overflow-hidden rounded-sm" style={{ background: '#141d33' }}>
-                <span className="block h-full rounded-sm transition-all duration-500" style={{ width: `${s.closedPct}%`, background: mode === 'access' ? (on ? 'var(--cyan)' : '#245a66') : on ? 'var(--coral)' : '#7a3a4c' }} />
-              </span>
-              <span className="mono w-11 text-right text-[11px]" style={{ color: on ? 'var(--ink)' : 'var(--mute)' }}>{fmt(s.closedPct)}%</span>
-            </button>
-          )
-        })}
-      </div>
-      {mode === 'access' && <div className="mt-2 text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>*% of 1,820 graph nodes with an open directed route to the OSM-tagged hospital's nearest node. PROVISIONAL: single unverified destination, node ~356 m away; not population coverage.</div>}
-    </div>
-  )
-}
-
-const STATE_COLOR: Record<RoadState, string> = { closed: 'var(--coral)', 'bridge-exempt': 'var(--amber)', 'below-threshold': 'var(--ink)', 'no-noaa-value': 'var(--mute)' }
-
-function Detail({ sel, cat, onClose, onLocate }: { sel: Selection; cat: Cat; onClose: () => void; onLocate: () => void }) {
-  if (!sel) {
-    return (
-      <div className="panel p-3 text-xs" style={{ color: 'var(--mute)' }}>
-        <div className="label mb-1">Inspector</div>
-        Click any road to see its NOAA depth bin and illustrative closure status for every category.
-      </div>
-    )
-  }
-  if (sel.kind === 'facility') {
-    const f = sel.facility
-    return (
-      <div className="panel p-3 text-xs">
-        <div className="flex items-start justify-between"><div className="label">Facility · provisional</div><button onClick={onClose} className="text-[var(--mute)]" aria-label="Close">✕</button></div>
-        <div className="mt-1 text-sm font-semibold">{f.name}</div>
-        <p className="mt-2 leading-relaxed" style={{ color: 'var(--mute)' }}>
-          OSM-tagged hospital. Emergency-department entrance <b className="text-[var(--amber)]">not verified</b>. It lies <span className="mono text-[var(--ink)]">{fmt(f.snap_m)} m</span> from its nearest graph node (dashed line) and just outside the current 4 km prototype network, so reachability to it is <b>provisional</b>.
-        </p>
-        <button onClick={onLocate} className="mt-2 rounded border border-[var(--line)] px-2 py-1 hover:bg-white/5">Fly to facility</button>
-      </div>
-    )
-  }
-  const p = sel.props
-  return (
-    <div className="panel p-3 text-xs">
-      <div className="flex items-start justify-between"><div className="label">Road segment #{p.id}</div><button onClick={onClose} className="text-[var(--mute)]" aria-label="Close">✕</button></div>
-      <div className="mt-1 text-sm font-semibold">{p.name || 'Unnamed road'}</div>
-      <div className="mono mt-0.5 text-[11px]" style={{ color: 'var(--mute)' }}>
-        {p.hw}{p.bridge ? ' · bridge (OSM)' : ''} · {fmt(p.len)} m · {isArterial(p.hw) ? 'major' : 'local'}
-      </div>
-      <table className="mono mt-2 w-full text-[11px]">
-        <tbody>
-          {CATS.slice(1).map((c) => {
-            const st = roadStatus(p, c.id as 1 | 2 | 3 | 4 | 5)
-            const bin = p[`b${c.id}`] as number
-            return (
-              <tr key={c.id} className={c.id === cat ? 'bg-white/5' : ''} title={st.detail}>
-                <td className="py-0.5 pl-1" style={{ color: c.id === cat ? 'var(--cyan)' : 'var(--mute)' }}>{c.short}</td>
-                <td>{bin > 0 ? depthLabel(bin) : '—'}</td>
-                <td className="pr-1 text-right" style={{ color: STATE_COLOR[st.state] }}>{st.label}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-      <div className="mt-2 text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>*Illustrative rule: ≥1 sample (~20 m) in NOAA bin ≥ 3 (≥ 2 ft lower bound). Not an observed or official closure. “No NOAA value” = NoData (unknown, not confirmed dry). Both travel directions of a street share one geometry and the same exposure.</div>
-    </div>
-  )
-}
-
-function Method({ onClose }: { onClose: () => void }) {
-  const rows: [string, string][] = [
-    ['Hazard data', 'NOAA NHC National Storm Surge Risk Maps v4 (June 2026 reprocessing), SLOSH MOM HIGH-tide inundation, Categories 1–5. Multi-storm planning envelopes — not forecasts, not event-specific depths.'],
-    ['NoData', 'NOAA value 255 means unknown, not confirmed dry. Bins 1–20 are 1-ft classes; 21 is > 20 ft.'],
-    ['Roads', 'OpenStreetMap contributors via OSMnx; 4,691 directed edges / 1,820 nodes in a ~4 km prototype graph. Segments sampled every ~20 m against each raster.'],
-    ['Closure rule', 'ILLUSTRATIVE: a segment is “closed” if any sample falls in NOAA bin ≥ 3 (lower bound ≥ 2 ft). OSM bridge=yes edges are exempt; real deck heights are unknown, and this is not a structural assessment.'],
-    ['Facilities', 'One OSM-tagged hospital. Emergency entrance unverified; nearest graph node ~356 m away. Medical accessibility is PROVISIONAL.'],
-    ['Zones', 'Planned: five proposed neighborhood analysis zones + one Bridge Corridor infrastructure zone. Custom demo zones, not official districts. Not yet drawn.'],
-    ['Not claimed', 'No population coverage, casualties, observed outcomes, official closures, wind effects, rainfall, or congestion. Educational simulator — not for real emergency decisions.'],
-  ]
-  return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <div className="panel max-h-full w-full max-w-2xl overflow-y-auto p-5" style={{ background: '#0b1120' }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Methodology and sources">
-        <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Methodology & sources</h2><button onClick={onClose} aria-label="Close">✕</button></div>
-        <dl className="mt-3 space-y-3 text-[13px]">
-          {rows.map(([k, v]) => (
-            <div key={k}><dt className="label">{k}</dt><dd className="mt-0.5 leading-relaxed">{v}</dd></div>
-          ))}
-        </dl>
-      </div>
-    </div>
-  )
-}
-
-type Tab = 'impact' | 'zones' | 'response' | 'agents'
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'impact', label: 'Impact' }, { id: 'zones', label: 'Zones' }, { id: 'agents', label: 'Modules' }, { id: 'response', label: 'Response' },
-]
-const STEP_TAB: Tab[] = ['impact', 'zones', 'agents', 'response', 'response']
 
 export default function App() {
   const [cat, setCat] = useState<Cat>(3)
-  const [roads, setRoads] = useState<RoadCollection | null>(null)
-  const [facility, setFacility] = useState<Facility | null>(null)
-  const [selected, setSelected] = useState<Selection>(null)
-  const [showLocal, setShowLocal] = useState(true)
-  const [showBridges, setShowBridges] = useState(true)
-  const [basemap, setBasemap] = useState<boolean | null>(null)
-  const [method, setMethod] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [access, setAccess] = useState<Access[] | null>(null)
   const [tab, setTab] = useState<Tab>('impact')
-  const [leftOpen, setLeftOpen] = useState(true)
-  const [rightOpen, setRightOpen] = useState(true)
-  const [zones, setZones] = useState<Zone[] | null>(null)
-  const [zoneSel, setZoneSel] = useState<string | null>(null)
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null)
-  const [applied, setApplied] = useState<string[]>([])
-  const [evalRes, setEvalRes] = useState<EvalResult | null>(null)
-  const [evalErr, setEvalErr] = useState<string | null>(null)
-  const [plan, setPlan] = useState<PlanResponse | null>(null)
+  const [setup, setSetup] = useState<Setup | null>(null)
+  const [hints, setHints] = useState<ActionHint[] | null>(null)
+  const [assign, setAssign] = useState<Assignment[]>([])
+  const [result, setResult] = useState<AllocationResult | null>(null)
+  const [backup, setBackup] = useState<Assignment[] | null>(null)
+  const [plan, setPlan] = useState<GemmaPlan | null>(null)
   const [planBusy, setPlanBusy] = useState(false)
   const [planErr, setPlanErr] = useState<string | null>(null)
-  const [planStatus, setPlanStatus] = useState<PlanStatus | null>(null)
-  const [agentOpen, setAgentOpen] = useState<string | null>('medical')
-  const [backendDown, setBackendDown] = useState(false)
-  const [step, setStep] = useState(1)
+  const [cmp, setCmp] = useState<Compared | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
+  const [zoneSel, setZoneSel] = useState<string | null>(null)
+  const [layers, setLayers] = useState<Set<LayerKey>>(new Set(DEFAULT_LAYERS))
+  const [toast, setToast] = useState<Toast | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [panelOpen, setPanelOpen] = useState(true)
+  const [howOpen, setHowOpen] = useState(false)
+  const [basemap, setBasemap] = useState<boolean | null>(null)
+  const [zonesGeo, setZonesGeo] = useState<ZoneGeo[] | null>(null)
+  const [roads, setRoads] = useState<RoadCollection | null>(null)
+  const [geo, setGeo] = useState<EdgeGeo | null>(null)
+  const [facility, setFacility] = useState<Facility | null>(null)
+  const [welcome, setWelcome] = useState(() => { try { return localStorage.getItem(STORED) !== '1' } catch { return true } })
   const [demo, setDemo] = useState(false)
-  const [welcome, setWelcome] = useState(() => { try { return localStorage.getItem('sf_welcomed') !== '1' } catch { return true } })
-  const [reach, setReach] = useState<Reach | null>(null)
+  const [step, setStep] = useState(1)
+  const [demoBusy, setDemoBusy] = useState(false)
+  const [demoErr, setDemoErr] = useState<string | null>(null)
+  const [demoZone, setDemoZone] = useState<string | null>(null)
   const fly = useRef<FlyApi | null>(null)
 
+  // latest values for async handlers
+  const epoch = useRef(0)
+  const R = useRef({ cat, assign, backup, setup, hints, zoneSel, geo, zonesGeo, plan })
+  R.current = { cat, assign, backup, setup, hints, zoneSel, geo, zonesGeo, plan }
+  const busyRef = useRef(false)
+  const toastId = useRef(0)
+
   useEffect(() => {
-    fetch('/data/roads.geojson').then((r) => r.json()).then(setRoads).catch((e) => setErr(String(e)))
-    fetch('/api/v1/scenarios').then((r) => r.json()).then(setAccess).catch(() => { setAccess(null); setBackendDown(true) })
+    fetch('/data/roads.geojson').then((r) => r.json()).then((fc: RoadCollection) => { setRoads(fc); setGeo(edgeGeometry(fc)) }).catch((e) => setLoadErr(String(e)))
     fetch('/data/facilities.json').then((r) => r.json()).then((f: Facility[]) => setFacility(f[0] ?? null)).catch(() => {})
-    api.zones().then(setZones).catch(() => setZones(null))
-    api.candidates().then(setCandidates).catch(() => setCandidates(null))
-    api.planStatus().then(setPlanStatus).catch(() => setPlanStatus(null))
+    api.zoneGeo().then(setZonesGeo).catch(() => setZonesGeo(null))
   }, [])
 
   useEffect(() => {
-    let dead = false
-    setEvalErr(null)
-    api.evaluate(cat, applied).then((r) => !dead && setEvalRes(r)).catch((e) => !dead && setEvalErr(String(e)))
-    return () => { dead = true }
-  }, [cat, applied])
+    if (!toast) return
+    const t = setTimeout(() => setToast((c) => (c?.id === toast.id ? null : c)), 9000)
+    return () => clearTimeout(t)
+  }, [toast])
+  const say = useCallback((text: string, tone: Toast['tone'] = 'ok') => setToast({ id: ++toastId.current, text, tone }), [])
 
-  useEffect(() => { setPlan(null); setPlanErr(null) }, [cat])
+  const commit = (list: Assignment[], res: AllocationResult) => { R.current.assign = list; setAssign(list); setResult(res) }
 
-  useEffect(() => {
-    let dead = false
-    if (!applied.length) { setReach(null); return }
-    api.reach(cat, applied).then((r) => !dead && setReach(r)).catch(() => !dead && setReach(null))
-    return () => { dead = true }
-  }, [cat, applied])
-
-  // demo step 5: frame the applied sites and the nodes that gained a route
-  useEffect(() => {
-    if (!demo || step !== 5 || !reach || !reach.sites.length) return
-    const pts: [number, number][] = [...reach.sites.map((s) => [s.lon, s.lat] as [number, number]), ...reach.gained.filter((_, i) => i % 6 === 0)]
-    fly.current?.fit(pts)
-    setTimeout(() => document.getElementById('verified-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 600)
-  }, [demo, step, reach])
+  /* ---------------------------------------------------------- category */
+  const loadCategory = useCallback(async (c: Cat): Promise<{ setup: Setup; hints: ActionHint[] } | null> => {
+    const my = ++epoch.current
+    R.current.cat = c; R.current.assign = []; R.current.backup = null; R.current.setup = null; R.current.hints = null; R.current.plan = null
+    setCat(c); setLoading(true); setLoadErr(null)
+    setAssign([]); setBackup(null); setPlan(null); setPlanErr(null); setCmp(null); setResult(null); setSetup(null); setHints(null)
+    setLayers(new Set(DEFAULT_LAYERS))
+    try {
+      const [s, h, r] = await Promise.all([api.setup(c), api.actions(c), api.evaluate(c, [])])
+      if (my !== epoch.current) return null
+      R.current.setup = s; R.current.hints = h
+      setSetup(s); setHints(h); setResult(r); setLoading(false)
+      return { setup: s, hints: h }
+    } catch (e) {
+      if (my === epoch.current) { setLoadErr(`Could not load this storm: ${errText(e)}. Is the backend running on port 8000?`); setLoading(false) }
+      return null
+    }
+  }, [])
+  useEffect(() => { void loadCategory(3) }, [loadCategory])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLElement && /INPUT|TEXTAREA/.test(e.target.tagName)) return
-      if (/^[0-5]$/.test(e.key)) setCat(Number(e.key) as Cat)
-      if (e.key === 'Escape') { setSelected(null); setMethod(false) }
+      if (e.target instanceof HTMLElement && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+      if (/^[1-5]$/.test(e.key) && !busyRef.current) void loadCategory(Number(e.key) as Cat)
+      if (e.key === 'Escape') { setHowOpen(false); setZoneSel(null) }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
+  }, [loadCategory])
+
+  /* ---------------------------------------------------------- map helpers */
+  const enable = (keys: LayerKey[], exclusiveCoverage = false) =>
+    setLayers((prev) => {
+      const n = new Set(prev)
+      if (exclusiveCoverage && keys.some((k) => COVER.includes(k))) COVER.forEach((k) => n.delete(k))
+      keys.forEach((k) => n.add(k))
+      return n
+    })
+  const toggleLayer = (k: LayerKey) => setLayers((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n })
+
+  const selectZone = useCallback((id: string | null) => {
+    setZoneSel(id)
+    R.current.zoneSel = id
+    if (!id) return
+    const g = R.current.zonesGeo?.find((z) => z.id === id)
+    if (g?.boundary) fly.current?.fit(g.boundary.coordinates[0] as [number, number][], 15.4)
+    else if (g) fly.current?.to(g.center[0], g.center[1], 15.2)
   }, [])
 
-  const all = useMemo(() => (roads ? CATS.map((c) => computeStats(roads, c.id)) : null), [roads])
-  const s = all?.[cat]
-  const toggle = (id: string) => setApplied((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]))
-  const recommended = plan?.plan.recommended_ids ?? []
-
-  async function generate(): Promise<PlanResponse | null> {
-    setPlanBusy(true); setPlanErr(null)
-    try { const r = await api.generatePlan(cat, 3); setPlan(r); return r } catch (e) { setPlanErr(String(e)); return null } finally { setPlanBusy(false) }
-  }
-  const focusCandidate = (c: Candidate) => fly.current?.to(c.lon, c.lat, 15.8)
-  const selectZone = (id: string | null) => {
-    setZoneSel(id)
-    const z = id ? zones?.find((x) => x.id === id) : null
-    if (z) fly.current?.to(z.center[0], z.center[1], 15.2)
-  }
-
-  /** Perform the actions of a step. `auto` = inside the guided demo (may call the planner). */
-  async function runStep(n: number, auto: boolean) {
-    setStep(n); setTab(STEP_TAB[n - 1]); setRightOpen(true)
-    if (n === 1) {
-      setCat(3); setApplied([]); setPlan(null); setPlanErr(null); setZoneSel(null); setSelected(null); setLeftOpen(true); fly.current?.home()
-    } else if (n === 2) {
-      setApplied([]); selectZone('historic_downtown')
-    } else if (n === 3) {
-      setAgentOpen('medical'); fly.current?.home()
-    } else if (n === 4) {
-      if (auto && !plan && !planBusy) void generate()
-    } else if (n === 5) {
-      if (!auto) return
-      const pl = plan ?? (await generate())
-      if (pl) setApplied(pl.plan.recommended_ids)
+  /** Frame what a just-placed unit changed, then pulse it. */
+  function focusOn(res: AllocationResult, e: PlacedAssignment) {
+    const z = e.zone_id
+    let pts: [number, number][] = []
+    if (e.resource === 'debris_crew') pts = R.current.geo ? edgesInfo(R.current.geo, ((e.details?.cleared_edge_ids as number[]) ?? [])).pts : []
+    else {
+      const L = res.layers
+      const pick = { ems: L.ems, supply: L.supply, medical: L.medical } as Record<string, { zone_id: string; point: [number, number]; coverage: [number, number][] }[]>
+      if (pick[e.resource === 'ems_team' ? 'ems' : e.resource === 'supply_team' ? 'supply' : 'medical'] && e.resource !== 'water_rescue' && e.resource !== 'helicopter') {
+        const arr = pick[e.resource === 'ems_team' ? 'ems' : e.resource === 'supply_team' ? 'supply' : 'medical']
+        arr.filter((u) => u.zone_id === z).forEach((u) => pts.push(u.point, ...u.coverage))
+      } else if (e.resource === 'water_rescue') L.water.filter((u) => u.zone_id === z).forEach((u) => pts.push(u.point, ...u.targets))
+      else L.helicopter.filter((u) => u.zone_id === z).forEach((u) => pts.push(u.point, ...u.cluster))
     }
+    if (pts.length) { fly.current?.fit(pts, 15.4); setTimeout(() => fly.current?.pulse(), 1500) }
   }
-  const startDemo = () => { setWelcome(false); try { localStorage.setItem('sf_welcomed', '1') } catch { /* ignore */ } setDemo(true); void runStep(1, true) }
-  const skipWelcome = () => { setWelcome(false); try { localStorage.setItem('sf_welcomed', '1') } catch { /* ignore */ } }
-  const demoCtx: DemoCtx = {
-    cat, closedPct: s && cat ? s.closedPct : null, hospitalNodesPct: access && cat ? access[cat].nodes_with_route_pct : null,
-    hospitalOrigins: access ? `${access[cat].origins_with_route}/${access[cat].origins_sampled}` : null,
-    plan, planBusy, planErr, evalRes, candidates, gainedNodes: reach?.counts.gained_nodes ?? null,
+
+  /* ---------------------------------------------------------- deploy */
+  async function guarded<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    if (busyRef.current) return undefined
+    busyRef.current = true; setBusy(true)
+    try { return await fn() } catch (e) { say(`Could not reach the simulator (${errText(e)}). Nothing was changed.`, 'warn') } finally { busyRef.current = false; setBusy(false) }
+    return undefined
   }
+
+  /** Try a new allocation whose last entry is the change under test. Commits only if that entry is placed. */
+  async function tryList(list: Assignment[], resource: ResourceId) {
+    const my = epoch.current
+    const res = await api.evaluate(R.current.cat, list)
+    if (my !== epoch.current) return
+    const e = res.assignments.find((a) => a.index === list.length - 1)
+    if (e && e.status === 'placed') {
+      commit(list, res); say(e.message, 'ok'); enable(layersFor(resource), true); focusOn(res, e)
+    } else say(e?.message ?? 'That could not be placed.', 'warn')
+  }
+
+  const deploy = (resource: ResourceId) => {
+    const zone = R.current.zoneSel
+    if (!zone) return say('Select a neighborhood first.', 'warn')
+    return guarded(() => tryList([...R.current.assign, { resource, zone_id: zone }], resource))
+  }
+  const remove = (i: number) => guarded(async () => {
+    const my = epoch.current
+    const a = R.current.assign[i]
+    const list = removeAt(R.current.assign, i)
+    const res = await api.evaluate(R.current.cat, list)
+    if (my !== epoch.current) return
+    commit(list, res); say(`${RES[a.resource].short} removed. The unit is back in your inventory.`, 'ok')
+  })
+  const move = (i: number, zone: string) => guarded(() => tryList(moveTo(R.current.assign, i, zone), R.current.assign[i].resource))
+  const reset = (quiet = false) => guarded(async () => {
+    const my = epoch.current
+    const res = await api.evaluate(R.current.cat, [])
+    if (my !== epoch.current) return
+    R.current.backup = null; setBackup(null); commit([], res); setLayers(new Set(DEFAULT_LAYERS))
+    if (!quiet) say('Allocation cleared. All 11 units are available again.', 'ok')
+  })
+
+  /* ---------------------------------------------------------- Gemma */
+  const generate = useCallback(async (): Promise<GemmaPlan | null> => {
+    if (busyRef.current) return null
+    const my = epoch.current
+    setPlanBusy(true); setPlanErr(null)
+    try {
+      const p = await api.gemmaPlan(R.current.cat, R.current.backup ?? R.current.assign)
+      if (my !== epoch.current) return null
+      R.current.plan = p; setPlan(p); return p
+    } catch (e) {
+      if (my === epoch.current) setPlanErr(errText(e))
+      return null
+    } finally { setPlanBusy(false) }
+  }, [])
+
+  const mine = backup ?? assign
+  const mineKey = JSON.stringify(mine.map((a) => [a.resource, a.zone_id]))
+  useEffect(() => {
+    if (!plan) { setCmp(null); return }
+    let dead = false
+    api.compare(cat, [{ label: 'mine', assignments: mine }, { label: 'gemma', assignments: plan.verified.assignments }]).then((c) => !dead && setCmp(c)).catch(() => !dead && setCmp(null))
+    return () => { dead = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan, mineKey, cat])
+
+  const applyGemma = () => {
+    const p = R.current.plan
+    if (!p) return
+    const keep = R.current.backup ?? R.current.assign
+    R.current.backup = keep; setBackup(keep)
+    commit(p.verified.assignments, p.verified.result)
+    setLayers(new Set<LayerKey>(['flood', 'debris', ...(p.verified.result.roads.cleared_edge_ids.length ? (['cleared'] as LayerKey[]) : []), ...p.verified.assignments.flatMap((a) => (a.resource === 'debris_crew' ? [] : layersFor(a.resource))).slice(0, 2)]))
+    say('Gemma’s plan is now on the map. “Restore My Plan” brings yours back.', 'ok')
+  }
+  const restoreMine = () => guarded(async () => {
+    const b = R.current.backup
+    if (!b) return
+    const my = epoch.current
+    const res = await api.evaluate(R.current.cat, b)
+    if (my !== epoch.current) return
+    R.current.backup = null; setBackup(null); commit(b, res); say('Your own plan is restored.', 'ok')
+  })
+  const gemmaApplied = backup !== null && !!plan && sameAllocation(assign, plan.verified.assignments)
+
+  /* ---------------------------------------------------------- guided demo */
+  async function setAllocation(list: Assignment[]): Promise<AllocationResult | null> {
+    const my = epoch.current
+    let res = await api.evaluate(R.current.cat, list)
+    if (my !== epoch.current) return null
+    const keep = list.filter((_, i) => res.assignments.find((a) => a.index === i)?.status === 'placed')
+    if (keep.length !== list.length) { list = keep; res = await api.evaluate(R.current.cat, list); if (my !== epoch.current) return null }
+    commit(list, res)
+    return res
+  }
+
+  async function runStep(n: number) {
+    if (busyRef.current) return
+    busyRef.current = true; setDemoBusy(true); setDemoErr(null); setDemo(true); setStep(n); setBusy(true)
+    try {
+      let ctx = R.current.setup && R.current.hints && R.current.cat === 3 ? { setup: R.current.setup, hints: R.current.hints } : null
+      if (!ctx) { busyRef.current = false; ctx = await loadCategory(3); busyRef.current = true }
+      if (!ctx) throw new Error('Could not load Category 3. Check that the backend is running.')
+      if (n === 1) {
+        if (R.current.assign.length || R.current.backup) { const res = await api.evaluate(3, []); R.current.backup = null; setBackup(null); commit([], res) }
+        setPlan(null); R.current.plan = null; setPlanErr(null)
+        setLayers(new Set(DEFAULT_LAYERS)); setTab('impact'); setZoneSel(null); fly.current?.home(); return
+      }
+      const zid = pickDemoZone(ctx.setup, ctx.hints) ?? ctx.setup.attention_order[0]
+      setDemoZone(zid); setTab(n === 5 ? 'compare' : 'deploy')
+      if (n === 2) { selectZone(zid); setLayers(new Set(DEFAULT_LAYERS)); await setAllocation([]); return }
+      if (R.current.zoneSel !== zid) selectZone(zid)
+      const hintOk = (r: ResourceId, z: string) => ctx!.hints.some((h) => h.resource === r && h.zone_id === z && h.valid)
+      const crew: Assignment[] = hintOk('debris_crew', zid) ? [{ resource: 'debris_crew', zone_id: zid }] : []
+      if (n === 3) {
+        const res = await setAllocation(crew)
+        const e = res?.assignments.find((a) => a.resource === 'debris_crew' && a.status === 'placed')
+        setLayers(new Set<LayerKey>(['flood', 'debris', 'cleared']))
+        if (e && res) { say(e.message); focusOn(res, e) } else setDemoErr('No debris crew could be placed in this neighborhood.')
+        return
+      }
+      const list: Assignment[] = [...crew, { resource: 'ems_team', zone_id: zid }]
+      if (hintOk('water_rescue', 'lincolnville') && zid !== 'lincolnville') list.push({ resource: 'water_rescue', zone_id: 'lincolnville' })
+      if (n === 4 || !sameAllocation(R.current.assign, list)) {
+        const res = await setAllocation(list)
+        const e = res?.assignments.find((a) => a.resource === 'ems_team' && a.status === 'placed')
+        setLayers(new Set<LayerKey>(['flood', 'cleared', 'ems', ...(res?.assignments.some((a) => a.resource === 'water_rescue') ? (['water'] as LayerKey[]) : [])]))
+        if (e && res) { say(e.message); if (n === 4) focusOn(res, e) }
+      }
+      if (n === 5) {
+        busyRef.current = false
+        if (!R.current.plan) await generate()
+        busyRef.current = true
+        fly.current?.home()
+      }
+    } catch (e) {
+      setDemoErr(`Something went wrong (${errText(e)}). Try Next again.`)
+    } finally { busyRef.current = false; setBusy(false); setDemoBusy(false) }
+  }
+  const dismissWelcome = () => { setWelcome(false); try { localStorage.setItem(STORED, '1') } catch { /* ignore */ } }
+  const startDemo = () => { dismissWelcome(); void runStep(1) }
+
+  /* ---------------------------------------------------------- derived */
+  const zonePct = useMemo(() => {
+    const o: Record<string, number> = {}
+    setup?.zones.forEach((z) => { o[z.zone_id] = z.cut_off_pct })
+    result?.zones.forEach((z) => { o[z.zone_id] = pctCutOff(z.after) })
+    return o
+  }, [setup, result])
+  const available = useMemo(() => {
+    const L = result?.layers
+    return {
+      flood: true, debris: (result?.roads.debris_remaining ?? 0) > 0, cleared: (result?.roads.cleared_edge_ids.length ?? 0) > 0,
+      ems: !!L?.ems.length, supply: !!L?.supply.length, water: !!L?.water.length, heli: !!L?.helicopter.length, medical: !!L?.medical.length,
+    } as Record<LayerKey, boolean>
+  }, [result])
+
+  const mineRes = cmp?.plans[0]?.result ?? (backup ? null : result)
+  const gemmaRes = cmp?.plans[1]?.result ?? plan?.verified.result ?? null
 
   return (
     <div className="relative h-full w-full overflow-hidden">
       <MapView
-        cat={cat} showLocal={showLocal} showBridges={showBridges} facility={facility} selected={selected} onSelect={setSelected} flyRef={fly} onBasemap={setBasemap}
-        zones={zones} zoneSel={zoneSel} onZone={(id) => { setZoneSel(id); if (id) { setTab('zones'); setStep(2); setRightOpen(true) } }}
-        candidates={candidates} applied={applied} recommended={recommended} onCandidate={toggle} reach={reach}
+        cat={cat} layers={layers} facility={facility} geo={geo} zones={zonesGeo} zonePct={zonePct} zoneSel={zoneSel} onZone={selectZone}
+        result={result} base={setup?.base ?? null} flyRef={fly} onBasemap={setBasemap} panelPad={panelOpen ? PANEL_W + 12 : 0}
       />
-      <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 55%, rgba(6,10,19,.7) 100%)' }} />
+      <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 60%, rgba(6,10,19,.65) 100%)' }} />
 
-      <header className="panel absolute top-3 right-3 left-3 z-10 flex items-center gap-4 px-4 py-2">
-        <div>
-          <div className="text-[17px] font-bold tracking-[.22em]">STORM<span style={{ color: 'var(--cyan)' }}>FORGE</span></div>
-          <div className="text-[10px] tracking-wide" style={{ color: 'var(--mute)' }}>Critical Access Intelligence · St. Augustine, FL</div>
+      <header className="panel absolute top-3 right-3 left-3 z-10 flex items-center gap-3 px-3.5 py-1.5">
+        <div className="leading-tight">
+          <div className="text-[16px] font-bold tracking-[.22em]">STORM<span style={{ color: 'var(--cyan)' }}>FORGE</span></div>
+          <div className="hidden text-[10px] xl:block" style={{ color: 'var(--mute)' }}>Where should limited rescue resources go?</div>
         </div>
-        <nav className="hidden flex-1 items-center justify-center gap-1 lg:flex" aria-label="Demo flow">
-          {STEP_META.map((st) => (
-            <button key={st.n} onClick={() => void runStep(st.n, demo)} aria-current={step === st.n ? 'step' : undefined} className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] whitespace-nowrap hover:bg-white/5" style={{ color: step === st.n ? 'var(--cyan)' : 'var(--mute)', background: step === st.n ? 'rgba(34,211,238,.08)' : undefined }}>
-              <span className="mono grid h-4 w-4 place-items-center rounded-full border text-[9px]" style={{ borderColor: 'currentColor' }}>{st.n}</span>{st.short}
-            </button>
+        <nav className="mx-auto flex gap-1" role="tablist" aria-label="Main">
+          {TABS.map((t) => (
+            <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className="rounded-lg px-5 py-1.5 text-[13px] font-semibold transition-colors"
+              style={{ background: tab === t.id ? 'rgba(34,211,238,.16)' : 'transparent', color: tab === t.id ? 'var(--cyan)' : 'var(--mute)', boxShadow: tab === t.id ? 'inset 0 -2px 0 var(--cyan)' : 'none' }}>{t.label}</button>
           ))}
         </nav>
-        <button onClick={startDemo} className="rounded px-3 py-1 text-xs font-semibold whitespace-nowrap" style={{ background: 'linear-gradient(90deg,#0e7490,#6d28d9)', color: 'white' }}>▶ Guided demo</button>
-        <span className="rounded border px-2 py-1 text-[10px] tracking-wider whitespace-nowrap uppercase" style={{ borderColor: 'var(--amber)', color: 'var(--amber)' }}><span className="hidden xl:inline">Educational simulator · </span>Not for emergency decisions</span>
-        <button onClick={() => setMethod(true)} className="rounded border border-[var(--line)] px-3 py-1 text-xs hover:bg-white/5">Methodology</button>
+        <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Hurricane category">
+          <span className="label mr-1 hidden lg:inline">Hurricane</span>
+          {CATS.slice(1).map((c) => (
+            <button key={c.id} role="radio" aria-checked={cat === c.id} onClick={() => !busy && void loadCategory(c.id)} title={`Category ${c.id} storm-surge planning envelope (not a forecast). Key ${c.id}`}
+              className="mono h-7 w-[34px] rounded border text-xs font-semibold"
+              style={{ borderColor: cat === c.id ? 'var(--cyan)' : 'var(--line)', background: cat === c.id ? 'rgba(34,211,238,.14)' : 'transparent', color: cat === c.id ? 'var(--cyan)' : 'var(--mute)', boxShadow: cat === c.id ? '0 0 12px rgba(34,211,238,.25)' : 'none' }}>{c.id}</button>
+          ))}
+        </div>
+        <button onClick={() => void runStep(1)} className="rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap text-white" style={{ background: 'linear-gradient(90deg,#0e7490,#6d28d9)' }}>▶ Guided demo</button>
+        <button onClick={() => setHowOpen(true)} className="rounded-lg border border-[var(--line)] px-2.5 py-1.5 text-xs whitespace-nowrap hover:bg-white/5" aria-label="How it works">ⓘ How it works</button>
       </header>
 
-      <button onClick={() => setLeftOpen(!leftOpen)} aria-label="Toggle left panel" title="Toggle left panel" className="panel absolute top-[84px] z-20 h-7 w-5 text-[11px] hover:bg-white/10" style={{ left: leftOpen ? 266 : 4 }}>{leftOpen ? '‹' : '›'}</button>
-      <button onClick={() => setRightOpen(!rightOpen)} aria-label="Toggle right panel" title="Toggle right panel" className="panel absolute top-[84px] z-20 h-7 w-5 text-[11px] hover:bg-white/10" style={{ right: rightOpen ? 316 : 4 }}>{rightOpen ? '›' : '‹'}</button>
+      <LayerControl on={layers} onToggle={toggleLayer} available={available} />
 
-      {leftOpen && (
-        <aside className="absolute top-[76px] bottom-10 left-3 z-10 flex w-[250px] flex-col gap-3 overflow-y-auto">
-          <div className="panel p-3">
-            <div className="label mb-2">Hurricane category · surge envelope</div>
-            <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Hurricane category">
-              {CATS.map((c) => (
-                <button
-                  key={c.id} role="radio" aria-checked={cat === c.id} onClick={() => setCat(c.id)}
-                  className="mono rounded border py-2 text-xs font-semibold transition-all"
-                  style={{
-                    borderColor: cat === c.id ? 'var(--cyan)' : 'var(--line)',
-                    background: cat === c.id ? 'rgba(34,211,238,.14)' : 'transparent',
-                    color: cat === c.id ? 'var(--cyan)' : 'var(--mute)',
-                    boxShadow: cat === c.id ? '0 0 14px rgba(34,211,238,.25)' : 'none',
-                  }}
-                >{c.id === 0 ? 'BASE' : `CAT ${c.id}`}</button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] leading-snug" style={{ color: 'var(--mute)' }}>
-              NOAA SLOSH MOM high-tide planning envelope — <b>not a forecast</b>. Keys 0–5 switch category.
-            </p>
+      {toast && (
+        <div key={toast.id} role="status" aria-live="polite" className="panel toast-in absolute top-[64px] z-30 flex max-w-[460px] items-start gap-2.5 px-4 py-2.5 text-[13px] leading-snug"
+          style={{ left: `calc((100% - ${panelOpen ? PANEL_W + 12 : 0}px) / 2)`, transform: 'translateX(-50%)', borderColor: toast.tone === 'ok' ? '#4ade80' : 'var(--amber)', boxShadow: `0 0 24px ${toast.tone === 'ok' ? 'rgba(74,222,128,.25)' : 'rgba(251,191,36,.25)'}` }}>
+          <span style={{ color: toast.tone === 'ok' ? '#4ade80' : 'var(--amber)' }}>{toast.tone === 'ok' ? '✓' : '!'}</span>
+          <span>{toast.text}</span>
+          <button onClick={() => setToast(null)} aria-label="Dismiss" className="ml-1" style={{ color: 'var(--mute)' }}>✕</button>
+        </div>
+      )}
+
+      <button onClick={() => setPanelOpen(!panelOpen)} aria-label={panelOpen ? 'Collapse panel' : 'Expand panel'} title={panelOpen ? 'Collapse panel' : 'Expand panel'}
+        className="panel absolute top-[72px] z-20 h-8 w-5 text-xs hover:bg-white/10" style={{ right: panelOpen ? PANEL_W + 14 : 4 }}>{panelOpen ? '›' : '‹'}</button>
+
+      {panelOpen && (
+        <aside className="panel absolute top-[64px] right-3 bottom-10 z-10 flex flex-col overflow-hidden" style={{ width: PANEL_W }} aria-label={`${tab} panel`}>
+          <div className="flex items-center justify-between border-b px-3.5 py-2" style={{ borderColor: 'var(--line)' }}>
+            <div className="text-[14px] font-semibold">Category {cat} hurricane</div>
+            <div className="mono text-[11px]" style={{ color: 'var(--mute)' }} aria-label="Units used">{result ? `${result.units_used}/${result.units_total} units sent` : ''}</div>
           </div>
-          <Legend />
-          <div className="panel p-3">
-            <div className="label mb-1">Layers</div>
-            <Toggle on={showLocal} onChange={setShowLocal}>Local streets (zoom in for detail)</Toggle>
-            <Toggle on={showBridges} onChange={setShowBridges}>OSM bridges</Toggle>
-            <div className="mt-2 flex gap-2">
-              <button onClick={() => fly.current?.home()} className="flex-1 rounded border border-[var(--line)] py-1 text-[11px] hover:bg-white/5">Reset view</button>
-              {facility && <button onClick={() => fly.current?.to(facility.lon, facility.lat, 14.6)} className="flex-1 rounded border border-[var(--line)] py-1 text-[11px] hover:bg-white/5">Locate hospital</button>}
-            </div>
+          <div className="flex-1 overflow-y-auto px-3.5 py-3">
+            {loadErr && !loading ? <div className="text-xs" style={{ color: 'var(--coral)' }}>{loadErr}</div> : null}
+            {tab === 'impact' && <ImpactTab setup={setup} result={result} zoneSel={zoneSel} onSelect={selectZone} onDeploy={() => setTab('deploy')} loading={loading} err={null} />}
+            {tab === 'deploy' && <DeployTab setup={setup} result={result} hints={hints} assign={assign} zoneSel={zoneSel} onSelect={selectZone} onDeploy={(r) => void deploy(r)} onRemove={(i) => void remove(i)} onMove={(i, z) => void move(i, z)} busy={busy} onReset={() => void reset()} gemmaApplied={gemmaApplied} onRestore={() => void restoreMine()} />}
+            {tab === 'compare' && (
+              <CompareTab setup={setup} mineRes={mineRes} gemmaRes={gemmaRes} cmp={cmp} plan={plan} planBusy={planBusy} planErr={planErr}
+                onGenerate={() => void generate()} onApply={applyGemma} onRestore={() => void restoreMine()} onReset={() => void reset()}
+                hasBackup={backup !== null} gemmaApplied={gemmaApplied} noneAssigned={mine.length === 0} mineLoading={!!backup && !cmp} />
+            )}
           </div>
         </aside>
       )}
 
-      {rightOpen && (
-        <aside className="absolute top-[76px] right-3 bottom-10 z-10 flex w-[300px] flex-col gap-3 overflow-y-auto">
-          <div className="panel flex items-center justify-between px-3 py-2">
-            <div>
-              <div className="label">Scenario</div>
-              <div className="text-sm font-semibold">{CATS[cat].label}{cat === 0 ? '' : ' envelope'}</div>
-            </div>
-            <Badge tone="amber">Derived · illustrative</Badge>
-          </div>
-          <div className="grid grid-cols-4 gap-1" role="tablist">
-            {TABS.map((t) => (
-              <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className="panel py-1.5 text-[11px] font-semibold" style={{ color: tab === t.id ? 'var(--cyan)' : 'var(--mute)', borderColor: tab === t.id ? 'var(--cyan)' : 'var(--line)' }}>{t.label}</button>
-            ))}
-          </div>
-          {backendDown && <div className="panel p-2 text-[11px]" style={{ color: 'var(--amber)' }}>Backend not reachable — start it (uvicorn, port 8000). Map exposure still works; simulation panels need the API.</div>}
-
-          {tab === 'impact' && (s && all ? (
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <Kpi label="Closed · directed length" value={cat === 0 ? '0' : fmt(s.closedPct)} unit="%" tone={cat === 0 ? undefined : 'coral'} sub={`${fmt(s.closedSegments)} of ${fmt(s.segments)} directed edges · two-way streets count twice`} />
-                <Kpi label="NOAA-valued · directed length" value={cat === 0 ? '0' : fmt(s.exposedPct)} unit="%" tone="cyan" sub={`${fmt(s.exposedKm, 0)} of ${fmt(s.lenKm, 0)} directed-km with any NOAA inundation value; rest is NoData (unknown)`} />
-                <Kpi label="Major edges closed" value={fmt(s.arterialClosed)} unit={`/ ${fmt(s.arterialTotal)}`} tone={s.arterialClosed ? 'coral' : undefined} sub="directed edges: trunk · primary · secondary · tertiary" />
-                <Kpi label="Bridge-exempt" value={fmt(s.bridgesExempt)} tone="amber" sub="would close by raw rule; deck height unknown" />
-              </div>
-              {access && (
-                <Kpi label="Graph nodes with hospital route · provisional" value={fmt(access[cat].nodes_with_route_pct)} unit="%" tone={access[cat].nodes_with_route_pct < 50 ? 'coral' : 'cyan'} sub={`all 1,820 nodes (headline) · ${access[cat].origins_with_route}/${access[cat].origins_sampled} fixed sample origins · one unverified hospital snap; network-bounded, not population coverage. Zero modeled access ≠ zero real-world care.`} />
-              )}
-              <Compare all={all} cat={cat} onPick={setCat} access={access} />
-              <Detail sel={selected} cat={cat} onClose={() => setSelected(null)} onLocate={() => facility && fly.current?.to(facility.lon, facility.lat, 14.6)} />
-            </>
-          ) : (
-            <div className="panel p-3 text-xs" style={{ color: err ? 'var(--coral)' : 'var(--mute)' }}>{err ?? 'Loading NOAA-derived road exposure…'}</div>
-          ))}
-
-          {tab === 'zones' && <ZonePanel zones={zones} sel={zoneSel} onSel={selectZone} cat={cat} applied={applied} />}
-          {tab === 'agents' && <AgentsPanel cat={cat} applied={applied} plan={plan} open={agentOpen} setOpen={setAgentOpen} />}
-          {tab === 'response' && (
-            <ResponsePanel
-              cat={cat} candidates={candidates} applied={applied} recommended={recommended} onToggle={toggle} onSet={setApplied} onFocus={focusCandidate}
-              evalRes={evalRes} evalErr={evalErr} plan={plan} planBusy={planBusy} planErr={planErr} planStatus={planStatus} onGenerate={generate}
-              onCite={(a) => { setAgentOpen(a); setTab('agents') }}
-            />
-          )}
-        </aside>
-      )}
-
-      <footer className="absolute bottom-2 left-3 z-10 text-[10px]" style={{ color: 'var(--mute)' }}>
-        <span>Hazard: NOAA NHC SLOSH MOM v4 (Jun 2026) · Roads: © OpenStreetMap contributors{basemap === false ? ' · basemap offline (roads-only mode)' : ' · basemap © CARTO'} · Zones &amp; staging sites are hypothetical demo constructs</span>
+      <footer className="absolute bottom-2 left-3 z-10 flex items-center gap-3 text-[10px]" style={{ color: 'var(--mute)' }}>
+        <span className="rounded border px-2 py-0.5 tracking-wider uppercase" style={{ borderColor: 'var(--amber)', color: 'var(--amber)', background: 'rgba(6,10,19,.7)' }}>Educational simulator · not for real emergency decisions</span>
+        <span className="hidden xl:inline">NOAA SLOSH surge maps · © OpenStreetMap{basemap === false ? ' · basemap offline' : ' · © CARTO'} · resources, debris and base are hypothetical</span>
       </footer>
-      {method && <Method onClose={() => setMethod(false)} />}
-      {demo && <DemoCoach step={step} ctx={demoCtx} onBack={() => void runStep(Math.max(1, step - 1), true)} onNext={() => void runStep(Math.min(5, step + 1), true)} onExit={() => setDemo(false)} />}
-      {welcome && <Welcome onStart={startDemo} onSkip={skipWelcome} />}
+
+      {howOpen && <HowItWorks onClose={() => setHowOpen(false)} setup={setup} roads={roads} cat={cat} />}
+      {demo && (
+        <DemoCoach step={step} onBack={() => void runStep(Math.max(1, step - 1))} onNext={() => void runStep(Math.min(5, step + 1))} onExit={() => setDemo(false)}
+          ctx={{ cat, setup, result, zone: setup?.zones.find((z) => z.zone_id === demoZone) ?? null, plan, planBusy, planErr, cmp, busy: demoBusy, err: demoErr }} />
+      )}
+      {welcome && <Welcome onStart={startDemo} onSkip={dismissWelcome} />}
     </div>
   )
 }

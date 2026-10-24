@@ -38,7 +38,7 @@ backend `python -m pytest -q` 97 passed; frontend `npx vitest run` 7 passed.
   `/api/v1/allocation/{setup,evaluate,compare,actions}`; 18 tests.
 - ✅ Phase C (0e68423): `backend/app/alloc_planner.py` — Gemma ranks `resource@zone` action ids; bounded greedy candidate generator; validation (ids, inventory, feasibility, leave-one-out redundancy,
   numbers, zone claims); labelled fallback; `/api/v1/allocation/plan`; 30 offline tests; live-verified with real Gemma.
-- 🔧 Phase B (frontend teammate): Impact | Deploy | Compare UI, overlays, 5-step guided demo, docs/DEMO.md, e2e at 1366x768 + 1920x1080.
-- ⬜ Phase D: Lead browser verification, final docs, commit.
+- ✅ Phase B (frontend teammate, verified by Lead): Impact | Deploy | Compare UI, 8 map overlays, welcome + 5-step coach, docs/DEMO.md; tsc/vitest(19)/build pass; e2e qa 51 checks + demo at 1366x768 and 1920x1080, 0 problems; one live Gemma plan through the UI verified.
+- ✅ Phase D: Lead verification + README/TASKS + commit.
 - Modeling decisions: EMS/supply coverage = within 1.5 km of road travel (assumed service radius); water rescue 500 m screening radius; helicopter <= 10 locations; provisional response base on W 9th St (in the Cat-5 core component);
   hospital node is a dead end that floods shut at Cat 3+ so it cannot be a dispatch origin. Medical support coverage stays unbounded (preserves earlier staging semantics).
