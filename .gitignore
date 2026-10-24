@@ -11,3 +11,6 @@ __pycache__/
 .api.log
 .api.err
 .last_plan.json
+.last_alloc_plan.json
+.last_gemma_raw.json
+.last_plan.json

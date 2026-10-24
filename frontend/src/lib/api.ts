@@ -1,93 +1,168 @@
-// Typed client for docs/CONTRACT.md. All numbers shown in the UI come from these responses (backend-owned).
+// Typed client for docs/CONTRACT_V2.md (resource-allocation API). Every number shown in the UI comes from these
+// responses (backend-owned, NetworkX). "Location" = a road-network graph node, never a person or household.
 
-export interface Metrics {
-  nodes_total: number
-  nodes_with_hospital_route: number
-  nodes_with_staging_route: number
-  nodes_with_any_care_route: number
-  origins_total: number
-  origins_with_hospital_route: number
-  origins_with_staging_route: number
-  origins_with_any_care_route: number
+export type ResourceId = 'debris_crew' | 'ems_team' | 'supply_team' | 'medical_support' | 'water_rescue' | 'helicopter'
+export type ZoneId = 'historic_downtown' | 'lincolnville' | 'davis_shores' | 'uptown_san_marco' | 'west_augustine' | 'bridge_corridor'
+
+export interface Assignment { resource: ResourceId; zone_id: string; candidate_id?: string }
+
+export interface InventoryItem { id: ResourceId; label: string; action: string; total: number; used: number; remaining: number }
+
+export interface SetupZone {
+  zone_id: string
+  name: string
+  kind: 'neighborhood' | 'infrastructure'
+  flooded_road_segments: number
+  debris_blocked: number
+  locations: number
+  cut_off_locations: number
+  hospital_locations: number
+  flood_exposed_locations: number
+  cut_off_pct: number
+}
+
+export interface Obstruction {
+  id: string
+  zone_id: string | null
+  name: string
+  highway: string
+  length_m: number
+  edge_ids: number[]
+  flood_closed_edge_ids: number[]
+  reason: 'debris' | 'debris + flooding'
+  cut_off_locations_if_blocked: number
+  cleared: boolean
+}
+
+export interface BaseSite { node_id: number; lon: number; lat: number; label: string; zone_id: string; provenance: string; disclosure: string }
+
+export interface Setup {
+  category: number
+  inventory: InventoryItem[]
+  total_units: number
+  base: BaseSite
+  zones: SetupZone[]
+  attention_order: string[]
+  debris: Obstruction[]
+  debris_meta: Record<string, unknown>
+  medical_candidates: { id: string; name: string; zone_id: string; lon: number; lat: number; node_id: number }[]
+  assumptions: string[]
+  settings: { service_radius_m: number; water_rescue_radius_m: number; helicopter_max_locations: number; crew_capacity: number }
+  global_before: Metrics
   provenance: string
 }
 
-export interface Zone {
-  id: string
+export interface Metrics {
+  locations_total: number
+  hospital_locations: number
+  response_reach_locations: number
+  ems_locations: number
+  supply_locations: number
+  medical_support_locations: number
+  water_rescue_locations: number
+  helicopter_locations: number
+}
+
+export interface ZoneMetrics {
+  zone_nodes: number
+  hospital_locations: number
+  response_reach_locations: number
+  cut_off_locations: number
+  ems_locations: number
+  supply_locations: number
+  medical_support_locations: number
+  water_rescue_locations: number
+  helicopter_locations: number
+  flood_exposed_locations: number
+  debris_blocked: number
+  debris_cleared: number
+}
+
+export type RejectReason =
+  | 'inventory_exceeded' | 'no_eligible_debris' | 'debris_not_reachable' | 'no_reachable_point' | 'no_candidate_site'
+  | 'candidate_not_in_region' | 'no_flood_exposed_locations' | 'no_target_within_radius' | 'no_isolated_locations'
+
+export interface PlacedAssignment {
+  index: number
+  resource: ResourceId
+  zone_id: string
+  zone_name: string
+  status: 'placed' | 'rejected'
+  reason: RejectReason | null
+  message: string
+  new_locations: number
+  consumed: boolean
+  details?: Record<string, unknown>
+}
+
+export interface ResultZone {
+  zone_id: string
   name: string
-  kind: 'neighborhood' | 'infrastructure'
-  center: [number, number]
-  boundary: { type: 'Polygon'; coordinates: number[][][] } | null
-  boundary_status: 'provisional' | 'verified'
-  method: string
-  node_count: number
+  flooded_road_segments: number
+  before: ZoneMetrics
+  after: ZoneMetrics
+  delta: ZoneMetrics
+  resources: { resource: ResourceId; message: string }[]
+  remaining: { kind: 'debris' | 'cut_off' | 'hospital' | 'water'; count: number; text: string }[]
+}
+
+type LonLat = [number, number]
+interface UnitPoint { zone_id: string; node_id: number; point: LonLat; street: string }
+
+export interface Layers {
+  ems: (UnitPoint & { coverage: LonLat[] })[]
+  supply: (UnitPoint & { coverage: LonLat[] })[]
+  medical: (UnitPoint & { candidate_id: string; name: string; coverage: LonLat[] })[]
+  water: (UnitPoint & { radius_m: number; targets: LonLat[] })[]
+  helicopter: (UnitPoint & { cluster: LonLat[] })[]
+}
+
+export interface AllocationResult {
+  category: number
+  inventory: InventoryItem[]
+  units_used: number
+  units_total: number
+  assignments: PlacedAssignment[]
+  rejected: PlacedAssignment[]
+  roads: {
+    flooded_segments: number
+    debris_total: number
+    debris_cleared: number
+    debris_remaining: number
+    cleared_obstruction_ids: string[]
+    cleared_edge_ids: number[]
+    debris: Obstruction[]
+    passable_directed_edges: number
+    flood_only_directed_edges: number
+  }
+  metrics: { before: Metrics; after: Metrics; delta: Metrics }
+  zones: ResultZone[]
+  layers: Layers
+  base: BaseSite
+  assumptions: string[]
+  provenance: string
   notes?: string
 }
 
-export interface ZoneImpact {
-  zone: string
-  category: number
-  edges_total: number
-  edges_closed: number
-  closed_length_pct: number
-  nodes: number
-  nodes_with_hospital_route: number
-  nodes_with_any_care_route: number
-  most_exposed_roads: { edge_id: number; name: string | null; max_bin: number }[]
-  provenance: string
-  limitations: string[]
-}
-
-export interface Candidate {
+export interface ActionHint {
   id: string
-  name: string
-  kind: string
+  resource: ResourceId
   zone_id: string
-  lon: number
-  lat: number
-  node_id: number
-  snap_distance_m: number
-  selection_rule: string
-  provenance: string
-  feasibility_by_category: Record<string, Record<string, unknown>>
-  limitations: string[]
+  zone_name: string
+  valid: boolean
+  reason: RejectReason | null
+  message: string
+  standalone_new_locations: number
+  details: Record<string, unknown>
 }
 
-export interface EvalResult {
-  category: number
-  candidate_ids: string[]
-  baseline: Metrics
-  intervention: Metrics
-  delta: Record<string, number>
-  per_candidate: { id: string; marginal: Record<string, number>; standalone: Metrics }[]
-  per_zone: { zone_id: string; baseline_any_care_nodes: number; intervention_any_care_nodes: number; zone_nodes: number }[]
-  warnings: string[]
-  provenance: string
-}
+export interface DiffRow { resource: ResourceId; zone_id: string; [label: string]: string | number }
 
-export interface Finding { id: string; text: string; value?: number | string; unit?: string; provenance: string }
-export interface AgentFinding { agent: string; title: string; headline: string; findings: Finding[]; limitations: string[]; evidence: Record<string, unknown> }
-export interface AgentReport {
-  category: number
-  applied_candidate_ids: string[]
-  transportation: AgentFinding
-  medical: AgentFinding
-  logistics: AgentFinding
-  community: AgentFinding
-  transit: { status: string; note: string }
-}
-
-export interface Reach {
-  category: number
-  candidate_ids: string[]
-  counts: { baseline_any_care_nodes: number; after_any_care_nodes: number; gained_nodes: number }
-  gained: [number, number][]
-  baseline_care: [number, number][]
-  sites: { id: string; lon: number; lat: number }[]
-}
+export interface Compared { category: number; plans: { label: string; result: AllocationResult }[]; assignment_diff: DiffRow[]; metric_diff: Partial<Metrics> }
 
 export interface PlanStatus { provider: string; configured: boolean; model: string | null; fallback_available: boolean }
-export interface PlanResponse {
+
+export interface GemmaPlan {
   category: number
   source: 'gemma' | 'deterministic_fallback'
   source_label: string
@@ -96,40 +171,52 @@ export interface PlanResponse {
   latency_ms: number
   plan: {
     summary: string
-    ranked: { candidate_id: string; rank: number; rationale: string }[]
-    recommended_ids: string[]
+    assignments: { action_id: string; resource: ResourceId; zone_id: string; rationale: string }[]
     tradeoffs: string[]
-    agent_citations: { agent: string; finding_id: string }[]
     limitations_ack: string
   }
-  validation: { ok: boolean; rejected: { reason: string; detail: string }[]; repairs: unknown[] }
+  validation: { ok: boolean; rejected: { reason: string; detail: string }[]; repairs: string[] }
   verified: {
-    evaluate: EvalResult
-    sequential_marginals: { step: number; candidate_id: string; marginal_nodes: number; marginal_origins: number; cumulative_nodes: number; meets_minimum: boolean }[]
-    zone_impact: { zone_id: string; zone_name: string; zone_nodes: number; baseline_any_care_nodes: number; after_any_care_nodes: number; gained_nodes: number; improved: boolean }[]
-    min_marginal_nodes_per_site: number
+    result: AllocationResult
+    assignments: Assignment[]
+    current_result: AllocationResult | null
+    assignment_diff: DiffRow[]
+    metric_diff: Partial<Metrics>
   }
+}
+
+/** Boundary geometry for the map (from /api/v1/zones; allocation setup has no geometry). */
+export interface ZoneGeo {
+  id: string
+  name: string
+  kind: 'neighborhood' | 'infrastructure'
+  center: [number, number]
+  boundary: { type: 'Polygon'; coordinates: number[][][] } | null
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, msg: string) { super(msg); this.status = status }
 }
 
 async function j<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${(await r.text()).slice(0, 200)}`)
+  if (!r.ok) throw new ApiError(r.status, `${r.status} ${r.statusText}: ${(await r.text()).slice(0, 200)}`)
   return r.json() as Promise<T>
 }
-const post = (url: string, body: unknown) =>
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+const post = (url: string, body: unknown, ms = 60000) =>
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) })
+const get = (url: string, ms = 60000) => fetch(url, { signal: AbortSignal.timeout(ms) })
+const clean = (a: Assignment[]) => a.map(({ resource, zone_id, candidate_id }) => (candidate_id ? { resource, zone_id, candidate_id } : { resource, zone_id }))
 
 export const api = {
-  zones: () => fetch('/api/v1/zones').then(j<Zone[]>),
-  zoneImpact: (id: string, category: number, ids: string[]) =>
-    fetch(`/api/v1/zones/${id}/impact?category=${category}&candidate_ids=${ids.join(',')}`).then(j<ZoneImpact>),
-  candidates: () => fetch('/api/v1/candidates').then(j<Candidate[]>),
-  evaluate: (category: number, candidate_ids: string[]) =>
-    post('/api/v1/interventions/evaluate', { category, candidate_ids }).then(j<EvalResult>),
-  report: (category: number, ids: string[]) =>
-    fetch(`/api/v1/agents/report?category=${category}&candidate_ids=${ids.join(',')}`).then(j<AgentReport>),
-  reach: (category: number, ids: string[]) =>
-    fetch(`/api/v1/interventions/reach?category=${category}&candidate_ids=${ids.join(',')}`).then(j<Reach>),
-  planStatus: () => fetch('/api/v1/plan/status').then(j<PlanStatus>),
-  generatePlan: (category: number, max_candidates = 3) =>
-    post('/api/v1/plan/generate', { category, max_candidates }).then(j<PlanResponse>),
+  zoneGeo: () => get('/api/v1/zones').then(j<ZoneGeo[]>),
+  setup: (category: number) => get(`/api/v1/allocation/setup?category=${category}`).then(j<Setup>),
+  actions: (category: number) => get(`/api/v1/allocation/actions?category=${category}`).then(j<ActionHint[]>),
+  evaluate: (category: number, assignments: Assignment[]) =>
+    post('/api/v1/allocation/evaluate', { category, assignments: clean(assignments) }).then(j<AllocationResult>),
+  compare: (category: number, plans: { label: string; assignments: Assignment[] }[]) =>
+    post('/api/v1/allocation/compare', { category, plans: plans.map((p) => ({ label: p.label, assignments: clean(p.assignments) })) }).then(j<Compared>),
+  planStatus: () => get('/api/v1/plan/status').then(j<PlanStatus>),
+  gemmaPlan: (category: number, current: Assignment[]) =>
+    post('/api/v1/allocation/plan', { category, current_assignments: clean(current) }, 150000).then(j<GemmaPlan>),
 }

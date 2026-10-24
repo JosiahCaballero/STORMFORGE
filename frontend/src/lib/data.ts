@@ -9,7 +9,26 @@ export interface RoadProps {
   [k: string]: string | number | boolean | null
 }
 export interface RoadCollection {
-  features: { properties: RoadProps }[]
+  features: { properties: RoadProps; geometry?: { type: string; coordinates: [number, number][] } }[]
+}
+/** edge id (roads.geojson `id`, = API edge_ids) -> polyline. */
+export type EdgeGeo = Map<number, [number, number][]>
+export function edgeGeometry(fc: RoadCollection): EdgeGeo {
+  const m: EdgeGeo = new Map()
+  for (const f of fc.features) if (f.geometry?.coordinates) m.set(f.properties.id, f.geometry.coordinates)
+  return m
+}
+/** Midpoint (by vertex) of the first listed edge that has geometry, plus all coordinates of the listed edges. */
+export function edgesInfo(geo: EdgeGeo, ids: number[]): { mid: [number, number] | null; pts: [number, number][] } {
+  const pts: [number, number][] = []
+  let mid: [number, number] | null = null
+  for (const id of ids) {
+    const c = geo.get(id)
+    if (!c?.length) continue
+    if (!mid) mid = c[Math.floor(c.length / 2)]
+    pts.push(...c)
+  }
+  return { mid, pts }
 }
 export interface Facility {
   name: string

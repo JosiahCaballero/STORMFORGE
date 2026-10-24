@@ -70,3 +70,16 @@ empty `limitations_ack`. The facility check is heuristic (can false-positive; th
   (`zone_claim_contradiction`, heuristic keyword matching, may over-reject; one repair retry then deterministic fallback).
 - Response adds backend-owned `verified.sequential_marginals` and `verified.zone_impact`.
 - Live check (Cat 3, real Gemma): recommended 1 site (`stage_uptown_san_marco_2`, +504 nodes); the other six each add <=1 node after it (verified by direct engine calls); latency 7.5 s.
+
+## Allocation planner (Phase C, 2026-10-24) - `backend/app/alloc_planner.py`, `POST /api/v1/allocation/plan`
+- Gemma returns only `action_id`s (`resource@zone`, e.g. `ems_team@west_augustine`) + explanatory text. Evidence is compact (~2.5k tokens): zone needs, inventory,
+  the 36 candidate actions with standalone effect, a backend bounded-greedy sequence (<= units x zones = 66 evaluations, never exhaustive), per-zone effect of that sequence,
+  and the user's current allocation when comparing.
+- Validation: schema; unknown ids; inventory overrun; every assignment recomputed by `AllocationModel.evaluate` (infeasible ones rejected with the backend's reason);
+  redundancy by leave-one-out (< 5 new locations in the unit's own metric); numbers must appear in the evidence; no coordinates; zone-improvement claims checked
+  per clause against the recomputed per-zone result. One repair retry with machine-readable feedback, then the labelled deterministic greedy plan.
+- Real-model findings: a real response was falsely rejected once because "leaves other zones without ..." was read as a claim about the zone named in the same sentence;
+  fixed with clause-level checks and an "other/remaining zones" exemption (regression fixture in tests). 
+- Live verification (Category 3, user plan = West Augustine crew + EMS): real `gemma-4-26b-a4b-it` response, 17 s, validated first attempt, 10 units, 0 rejected;
+  `verified.result` equals an independent `evaluate()`; every zone named as improving does improve in the backend result.
+- Tests are offline (mock transport) - 30 tests; no live calls in the suite.

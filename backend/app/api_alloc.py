@@ -6,6 +6,9 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+import time
+
+from .alloc_planner import generate_allocation_plan
 from .allocation import AllocationError, default_model
 
 router = APIRouter(prefix="/api/v1/allocation")
@@ -59,3 +62,23 @@ def compare(body: CompareBody):
 @router.get("/actions")
 def actions(category: int):
     return _run(default_model().actions, category)
+
+
+class PlanBody(BaseModel):
+    category: int
+    current_assignments: list[Assignment] | None = Field(default=None, max_length=40)
+
+
+_last_call = 0.0
+
+
+@router.post("/plan")
+def plan(body: PlanBody):
+    """Gemma (or the labelled deterministic fallback) proposes an allocation; the backend validates and scores it."""
+    global _last_call
+    now = time.monotonic()
+    if now - _last_call < 2.0:
+        raise HTTPException(429, "Please wait a moment before requesting another plan.")
+    _last_call = now
+    cur = [a.model_dump() for a in body.current_assignments] if body.current_assignments is not None else None
+    return _run(generate_allocation_plan, body.category, cur)
