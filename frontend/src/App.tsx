@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import MapView, { type FlyApi, type Selection } from './components/MapView'
 import {
-  CATS, computeStats, depthLabel, isArterial,
+  CATS, computeStats, depthLabel, isArterial, roadStatus, type RoadState,
   type Cat, type CatStats, type Facility, type RoadCollection,
 } from './lib/data'
 
@@ -85,6 +85,8 @@ function Compare({ all, cat, onPick, access }: { all: CatStats[]; cat: Cat; onPi
   )
 }
 
+const STATE_COLOR: Record<RoadState, string> = { closed: 'var(--coral)', 'bridge-exempt': 'var(--amber)', 'below-threshold': 'var(--ink)', 'no-noaa-value': 'var(--mute)' }
+
 function Detail({ sel, cat, onClose, onLocate }: { sel: Selection; cat: Cat; onClose: () => void; onLocate: () => void }) {
   if (!sel) {
     return (
@@ -118,21 +120,19 @@ function Detail({ sel, cat, onClose, onLocate }: { sel: Selection; cat: Cat; onC
       <table className="mono mt-2 w-full text-[11px]">
         <tbody>
           {CATS.slice(1).map((c) => {
-            const closed = p[`c${c.id}`] === 1
+            const st = roadStatus(p, c.id as 1 | 2 | 3 | 4 | 5)
             const bin = p[`b${c.id}`] as number
             return (
-              <tr key={c.id} className={c.id === cat ? 'bg-white/5' : ''}>
+              <tr key={c.id} className={c.id === cat ? 'bg-white/5' : ''} title={st.detail}>
                 <td className="py-0.5 pl-1" style={{ color: c.id === cat ? 'var(--cyan)' : 'var(--mute)' }}>{c.short}</td>
-                <td>{depthLabel(bin)}</td>
-                <td className="pr-1 text-right" style={{ color: closed ? 'var(--coral)' : p[`r${c.id}`] === 1 ? 'var(--amber)' : 'var(--mute)' }}>
-                  {closed ? 'CLOSED*' : p[`r${c.id}`] === 1 ? 'BRIDGE-EXEMPT' : 'open'}
-                </td>
+                <td>{bin > 0 ? depthLabel(bin) : '—'}</td>
+                <td className="pr-1 text-right" style={{ color: STATE_COLOR[st.state] }}>{st.label}</td>
               </tr>
             )
           })}
         </tbody>
       </table>
-      <div className="mt-2 text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>*Illustrative rule: ≥1 sample (~20 m) in NOAA bin ≥ 3. Not an observed or official closure.</div>
+      <div className="mt-2 text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>*Illustrative rule: ≥1 sample (~20 m) in NOAA bin ≥ 3 (≥ 2 ft lower bound). Not an observed or official closure. “No NOAA value” = NoData (unknown, not confirmed dry). Both travel directions of a street share one geometry and the same exposure.</div>
     </div>
   )
 }
@@ -255,13 +255,13 @@ export default function App() {
         {s && all ? (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <Kpi label="Roads closed" value={cat === 0 ? '0' : fmt(s.closedPct)} unit="% length" tone={cat === 0 ? undefined : 'coral'} sub={`${fmt(s.closedSegments)} of ${fmt(s.segments)} directed segments`} />
-              <Kpi label="Exposed" value={cat === 0 ? '0' : fmt(s.exposedPct)} unit="% length" tone="cyan" sub={`${fmt(s.exposedKm, 0)} of ${fmt(s.lenKm, 0)} directed-km (two-way roads count twice)`} />
-              <Kpi label="Major roads out" value={fmt(s.arterialClosed)} unit={`/ ${fmt(s.arterialTotal)}`} tone={s.arterialClosed ? 'coral' : undefined} sub="trunk · primary · secondary · tertiary" />
+              <Kpi label="Closed · directed length" value={cat === 0 ? '0' : fmt(s.closedPct)} unit="%" tone={cat === 0 ? undefined : 'coral'} sub={`${fmt(s.closedSegments)} of ${fmt(s.segments)} directed edges · two-way streets count twice`} />
+              <Kpi label="NOAA-valued · directed length" value={cat === 0 ? '0' : fmt(s.exposedPct)} unit="%" tone="cyan" sub={`${fmt(s.exposedKm, 0)} of ${fmt(s.lenKm, 0)} directed-km with any NOAA inundation value; rest is NoData (unknown)`} />
+              <Kpi label="Major edges closed" value={fmt(s.arterialClosed)} unit={`/ ${fmt(s.arterialTotal)}`} tone={s.arterialClosed ? 'coral' : undefined} sub="directed edges: trunk · primary · secondary · tertiary" />
               <Kpi label="Bridge-exempt" value={fmt(s.bridgesExempt)} tone="amber" sub="would close by raw rule; deck height unknown" />
             </div>
             {access && (
-              <Kpi label="Route to hospital · provisional" value={fmt(access[cat].nodes_with_route_pct)} unit="% of nodes" tone={access[cat].nodes_with_route_pct < 50 ? 'coral' : 'cyan'} sub={`${access[cat].origins_with_route}/${access[cat].origins_sampled} sample origins · simulated, single unverified destination`} />
+              <Kpi label="Graph nodes with hospital route · provisional" value={fmt(access[cat].nodes_with_route_pct)} unit="%" tone={access[cat].nodes_with_route_pct < 50 ? 'coral' : 'cyan'} sub={`all 1,820 nodes (headline) · ${access[cat].origins_with_route}/${access[cat].origins_sampled} fixed sample origins · one unverified hospital snap; network-bounded, not population coverage`} />
             )}
             <Compare all={all} cat={cat} onPick={setCat} access={access} />
           </>

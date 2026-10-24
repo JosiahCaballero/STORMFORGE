@@ -76,3 +76,17 @@ export function computeStats(fc: RoadCollection, cat: Cat): CatStats {
   s.exposedPct = (100 * s.exposedKm) / s.lenKm
   return s
 }
+
+export type RoadState = 'closed' | 'bridge-exempt' | 'below-threshold' | 'no-noaa-value'
+export interface RoadStatus { state: RoadState; label: string; detail: string }
+
+/** Closure rule (illustrative): closed iff any ~20 m sample has NOAA bin >= 3, unless OSM bridge=yes (exempt).
+ *  Bin 0 / no value = NOAA NoData(255): UNKNOWN, never reported as dry or confirmed open. */
+export function roadStatus(p: RoadProps, cat: 1 | 2 | 3 | 4 | 5): RoadStatus {
+  const bin = (p[`b${cat}`] as number) ?? 0
+  const frac = (p[`f${cat}`] as number) ?? 0
+  if (p[`c${cat}`] === 1) return { state: 'closed', label: 'CLOSED*', detail: `NOAA bin ${depthLabel(bin)} ≥ closure threshold` }
+  if (p[`r${cat}`] === 1) return { state: 'bridge-exempt', label: 'BRIDGE-EXEMPT', detail: `would close (${depthLabel(bin)}); OSM bridge, deck height unknown` }
+  if (bin > 0) return { state: 'below-threshold', label: 'open (rule)', detail: `${depthLabel(bin)} < threshold; NOAA values on ${Math.round(frac * 100)}% of samples` }
+  return { state: 'no-noaa-value', label: 'NO NOAA VALUE', detail: 'NoData = unknown, not confirmed dry; treated open by the rule' }
+}

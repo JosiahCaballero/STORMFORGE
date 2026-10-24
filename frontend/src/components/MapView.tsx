@@ -111,6 +111,7 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
       onBasemap(style !== BLANK)
       const map = new maplibregl.Map({ container: el.current, style, ...HOME, maxPitch: 60, canvasContextAttributes: { preserveDrawingBuffer: location.search.includes('shot') }, attributionControl: { compact: true } })
       mapRef.current = map
+      if (location.search.includes('shot')) (window as unknown as { __map: unknown }).__map = map
       map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right')
       flyRef.current = {
         home: () => map.flyTo({ ...HOME, duration: 1600, essential: true }),
