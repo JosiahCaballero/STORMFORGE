@@ -50,3 +50,13 @@ empty `limitations_ack`. The facility check is heuristic (can false-positive; th
   repair retry, fallback labeling, greedy fallback stability, cache, rate limit, category 0. Planner tests use a fake simulator; the
   fallback path was also run once against the real `interventions.py`. The Gemma path against real `agents.build_report` is untested
   until `agents.py` exists.
+
+
+## Live findings (2026-10-24, real key)
+- `models.list` shows exactly two Gemma models with `generateContent`: `gemma-4-26b-a4b-it`, `gemma-4-31b-it`.
+- Ping latency: 31b ~36 s (2 attempts); 26b-a4b ~5-6 s.
+- Gemma 4 is a *thinking* model. With default settings the real planner prompt (~2.7k tokens) produced only thought parts, hit
+  `finishReason: MAX_TOKENS` (4093 thought tokens) after ~87 s and returned no answer, so the planner timed out/fell back.
+- `thinkingConfig.thinkingBudget` is rejected (HTTP 400 "not supported for this model"); `thinkingLevel: "minimal"` works
+  (~10 s, valid JSON). The adapter now sends `thinkingLevel` (env `GEMMA_THINKING_LEVEL`, default `minimal`) and defaults to 26b-a4b.
+- Occasional transient HTTP 500 "Internal error encountered" from the API; the adapter retries once.

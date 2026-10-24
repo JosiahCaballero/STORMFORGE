@@ -21,7 +21,10 @@ import httpx
 log = logging.getLogger("stormforge.gemma")
 
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_MODEL = "gemma-4-31b-it"  # see docs/GEMMA.md; override with GEMMA_MODEL
+DEFAULT_MODEL = "gemma-4-26b-a4b-it"  # measured ~5 s ping vs ~36 s for 31b (docs/GEMMA.md); override with GEMMA_MODEL
+# Gemma 4 is a thinking model: at default settings it spent the whole 4096-token output budget on reasoning and
+# returned no answer (finishReason MAX_TOKENS, ~87 s). thinkingLevel "minimal" gave a valid answer in ~10 s.
+DEFAULT_THINKING_LEVEL = "minimal"  # override with GEMMA_THINKING_LEVEL; empty string disables the setting
 MAX_RESPONSE_BYTES = 256 * 1024
 
 _ENV_LOADED = False
@@ -124,10 +127,11 @@ class GemmaClient:
         if not self._key:
             raise GemmaError("no_api_key", "no GEMMA_API_KEY / GOOGLE_API_KEY configured")
         url = f"{self.base_url}/models/{self.model}:generateContent"
-        body = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": temperature, "maxOutputTokens": max_output_tokens},
-        }
+        gen_cfg: dict[str, Any] = {"temperature": temperature, "maxOutputTokens": max_output_tokens}
+        level = os.environ.get("GEMMA_THINKING_LEVEL", DEFAULT_THINKING_LEVEL).strip()
+        if level:
+            gen_cfg["thinkingConfig"] = {"thinkingLevel": level}
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen_cfg}
         start = time.monotonic()
         last: GemmaError | None = None
         attempts = 0
