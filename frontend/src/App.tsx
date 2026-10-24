@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AgentsPanel, Badge, ResponsePanel, ZonePanel } from './components/Panels'
+import { api, type Candidate, type EvalResult, type PlanResponse, type PlanStatus, type Zone } from './lib/api'
 import MapView, { type FlyApi, type Selection } from './components/MapView'
 import {
   CATS, computeStats, depthLabel, isArterial, roadStatus, type RoadState,
@@ -161,6 +163,18 @@ function Method({ onClose }: { onClose: () => void }) {
   )
 }
 
+type Tab = 'impact' | 'zones' | 'response' | 'agents'
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'impact', label: 'Impact' }, { id: 'zones', label: 'Zones' }, { id: 'agents', label: 'Modules' }, { id: 'response', label: 'Response' },
+]
+const STEPS: { n: number; label: string; tab: Tab; cat?: Cat }[] = [
+  { n: 1, label: 'Select storm', tab: 'impact', cat: 3 },
+  { n: 2, label: 'Inspect communities', tab: 'zones' },
+  { n: 3, label: 'Module findings', tab: 'agents' },
+  { n: 4, label: 'Gemma plan', tab: 'response' },
+  { n: 5, label: 'Apply & verify', tab: 'response' },
+]
+
 export default function App() {
   const [cat, setCat] = useState<Cat>(3)
   const [roads, setRoads] = useState<RoadCollection | null>(null)
@@ -172,13 +186,40 @@ export default function App() {
   const [method, setMethod] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [access, setAccess] = useState<Access[] | null>(null)
+  const [tab, setTab] = useState<Tab>('impact')
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [rightOpen, setRightOpen] = useState(true)
+  const [zones, setZones] = useState<Zone[] | null>(null)
+  const [zoneSel, setZoneSel] = useState<string | null>(null)
+  const [candidates, setCandidates] = useState<Candidate[] | null>(null)
+  const [applied, setApplied] = useState<string[]>([])
+  const [evalRes, setEvalRes] = useState<EvalResult | null>(null)
+  const [evalErr, setEvalErr] = useState<string | null>(null)
+  const [plan, setPlan] = useState<PlanResponse | null>(null)
+  const [planBusy, setPlanBusy] = useState(false)
+  const [planErr, setPlanErr] = useState<string | null>(null)
+  const [planStatus, setPlanStatus] = useState<PlanStatus | null>(null)
+  const [agentOpen, setAgentOpen] = useState<string | null>('medical')
+  const [backendDown, setBackendDown] = useState(false)
   const fly = useRef<FlyApi | null>(null)
 
   useEffect(() => {
     fetch('/data/roads.geojson').then((r) => r.json()).then(setRoads).catch((e) => setErr(String(e)))
-    fetch('/api/v1/scenarios').then((r) => r.json()).then(setAccess).catch(() => setAccess(null))
+    fetch('/api/v1/scenarios').then((r) => r.json()).then(setAccess).catch(() => { setAccess(null); setBackendDown(true) })
     fetch('/data/facilities.json').then((r) => r.json()).then((f: Facility[]) => setFacility(f[0] ?? null)).catch(() => {})
+    api.zones().then(setZones).catch(() => setZones(null))
+    api.candidates().then(setCandidates).catch(() => setCandidates(null))
+    api.planStatus().then(setPlanStatus).catch(() => setPlanStatus(null))
   }, [])
+
+  useEffect(() => {
+    let dead = false
+    setEvalErr(null)
+    api.evaluate(cat, applied).then((r) => !dead && setEvalRes(r)).catch((e) => !dead && setEvalErr(String(e)))
+    return () => { dead = true }
+  }, [cat, applied])
+
+  useEffect(() => { setPlan(null); setPlanErr(null) }, [cat])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -192,88 +233,127 @@ export default function App() {
 
   const all = useMemo(() => (roads ? CATS.map((c) => computeStats(roads, c.id)) : null), [roads])
   const s = all?.[cat]
+  const toggle = (id: string) => setApplied((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]))
+  const recommended = plan?.plan.recommended_ids ?? []
+
+  async function generate() {
+    setPlanBusy(true); setPlanErr(null)
+    try { setPlan(await api.generatePlan(cat, 3)) } catch (e) { setPlanErr(String(e)) } finally { setPlanBusy(false) }
+  }
+  const focusCandidate = (c: Candidate) => fly.current?.to(c.lon, c.lat, 15.8)
+  const step = (st: (typeof STEPS)[number]) => { if (st.cat !== undefined) setCat(st.cat); setTab(st.tab); setRightOpen(true) }
 
   return (
     <div className="relative h-full w-full overflow-hidden">
-      <MapView cat={cat} showLocal={showLocal} showBridges={showBridges} facility={facility} selected={selected} onSelect={setSelected} flyRef={fly} onBasemap={setBasemap} />
+      <MapView
+        cat={cat} showLocal={showLocal} showBridges={showBridges} facility={facility} selected={selected} onSelect={setSelected} flyRef={fly} onBasemap={setBasemap}
+        zones={zones} zoneSel={zoneSel} onZone={(id) => { setZoneSel(id); if (id) { setTab('zones'); setRightOpen(true) } }}
+        candidates={candidates} applied={applied} recommended={recommended} onCandidate={toggle}
+      />
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 55%, rgba(6,10,19,.7) 100%)' }} />
 
-      {/* top bar */}
       <header className="panel absolute top-3 right-3 left-3 z-10 flex items-center gap-4 px-4 py-2">
         <div>
           <div className="text-[17px] font-bold tracking-[.22em]">STORM<span style={{ color: 'var(--cyan)' }}>FORGE</span></div>
           <div className="text-[10px] tracking-wide" style={{ color: 'var(--mute)' }}>Critical Access Intelligence · St. Augustine, FL</div>
         </div>
-        <div className="hidden flex-1 text-center text-xs italic md:block" style={{ color: 'var(--mute)' }}>Break the city. See the consequences. Rebuild access.</div>
+        <nav className="hidden flex-1 items-center justify-center gap-1 lg:flex" aria-label="Demo flow">
+          {STEPS.map((st) => (
+            <button key={st.n} onClick={() => step(st)} className="flex items-center gap-1.5 rounded px-2 py-1 text-[11px] hover:bg-white/5" style={{ color: tab === st.tab ? 'var(--cyan)' : 'var(--mute)' }}>
+              <span className="mono grid h-4 w-4 place-items-center rounded-full border text-[9px]" style={{ borderColor: 'currentColor' }}>{st.n}</span>{st.label}
+            </button>
+          ))}
+        </nav>
         <span className="rounded border px-2 py-1 text-[10px] tracking-wider uppercase" style={{ borderColor: 'var(--amber)', color: 'var(--amber)' }}>Educational simulator · not for emergency decisions</span>
         <button onClick={() => setMethod(true)} className="rounded border border-[var(--line)] px-3 py-1 text-xs hover:bg-white/5">Methodology</button>
       </header>
 
-      {/* left: category + legend */}
-      <aside className="absolute top-[76px] bottom-10 left-3 z-10 flex w-[250px] flex-col gap-3 overflow-y-auto">
-        <div className="panel p-3">
-          <div className="label mb-2">Hurricane category · surge envelope</div>
-          <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Hurricane category">
-            {CATS.map((c) => (
-              <button
-                key={c.id} role="radio" aria-checked={cat === c.id} onClick={() => setCat(c.id)}
-                className="mono rounded border py-2 text-xs font-semibold transition-all"
-                style={{
-                  borderColor: cat === c.id ? 'var(--cyan)' : 'var(--line)',
-                  background: cat === c.id ? 'rgba(34,211,238,.14)' : 'transparent',
-                  color: cat === c.id ? 'var(--cyan)' : 'var(--mute)',
-                  boxShadow: cat === c.id ? '0 0 14px rgba(34,211,238,.25)' : 'none',
-                }}
-              >{c.id === 0 ? 'BASE' : `CAT ${c.id}`}</button>
+      <button onClick={() => setLeftOpen(!leftOpen)} aria-label="Toggle left panel" title="Toggle left panel" className="panel absolute top-[84px] z-20 h-7 w-5 text-[11px] hover:bg-white/10" style={{ left: leftOpen ? 266 : 4 }}>{leftOpen ? '‹' : '›'}</button>
+      <button onClick={() => setRightOpen(!rightOpen)} aria-label="Toggle right panel" title="Toggle right panel" className="panel absolute top-[84px] z-20 h-7 w-5 text-[11px] hover:bg-white/10" style={{ right: rightOpen ? 316 : 4 }}>{rightOpen ? '›' : '‹'}</button>
+
+      {leftOpen && (
+        <aside className="absolute top-[76px] bottom-10 left-3 z-10 flex w-[250px] flex-col gap-3 overflow-y-auto">
+          <div className="panel p-3">
+            <div className="label mb-2">Hurricane category · surge envelope</div>
+            <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="Hurricane category">
+              {CATS.map((c) => (
+                <button
+                  key={c.id} role="radio" aria-checked={cat === c.id} onClick={() => setCat(c.id)}
+                  className="mono rounded border py-2 text-xs font-semibold transition-all"
+                  style={{
+                    borderColor: cat === c.id ? 'var(--cyan)' : 'var(--line)',
+                    background: cat === c.id ? 'rgba(34,211,238,.14)' : 'transparent',
+                    color: cat === c.id ? 'var(--cyan)' : 'var(--mute)',
+                    boxShadow: cat === c.id ? '0 0 14px rgba(34,211,238,.25)' : 'none',
+                  }}
+                >{c.id === 0 ? 'BASE' : `CAT ${c.id}`}</button>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] leading-snug" style={{ color: 'var(--mute)' }}>
+              NOAA SLOSH MOM high-tide planning envelope — <b>not a forecast</b>. Keys 0–5 switch category.
+            </p>
+          </div>
+          <Legend />
+          <div className="panel p-3">
+            <div className="label mb-1">Layers</div>
+            <Toggle on={showLocal} onChange={setShowLocal}>Local streets (zoom in for detail)</Toggle>
+            <Toggle on={showBridges} onChange={setShowBridges}>OSM bridges</Toggle>
+            <div className="mt-2 flex gap-2">
+              <button onClick={() => fly.current?.home()} className="flex-1 rounded border border-[var(--line)] py-1 text-[11px] hover:bg-white/5">Reset view</button>
+              {facility && <button onClick={() => fly.current?.to(facility.lon, facility.lat, 14.6)} className="flex-1 rounded border border-[var(--line)] py-1 text-[11px] hover:bg-white/5">Locate hospital</button>}
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {rightOpen && (
+        <aside className="absolute top-[76px] right-3 bottom-10 z-10 flex w-[300px] flex-col gap-3 overflow-y-auto">
+          <div className="panel flex items-center justify-between px-3 py-2">
+            <div>
+              <div className="label">Scenario</div>
+              <div className="text-sm font-semibold">{CATS[cat].label}{cat === 0 ? '' : ' envelope'}</div>
+            </div>
+            <Badge tone="amber">Derived · illustrative</Badge>
+          </div>
+          <div className="grid grid-cols-4 gap-1" role="tablist">
+            {TABS.map((t) => (
+              <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className="panel py-1.5 text-[11px] font-semibold" style={{ color: tab === t.id ? 'var(--cyan)' : 'var(--mute)', borderColor: tab === t.id ? 'var(--cyan)' : 'var(--line)' }}>{t.label}</button>
             ))}
           </div>
-          <p className="mt-2 text-[11px] leading-snug" style={{ color: 'var(--mute)' }}>
-            NOAA SLOSH MOM high-tide planning envelope — <b>not a forecast</b>. Keys 0–5 switch category.
-          </p>
-        </div>
-        <Legend />
-        <div className="panel p-3">
-          <div className="label mb-1">Layers</div>
-          <Toggle on={showLocal} onChange={setShowLocal}>Local streets (zoom in for detail)</Toggle>
-          <Toggle on={showBridges} onChange={setShowBridges}>OSM bridges</Toggle>
-          <div className="mt-2 flex gap-2">
-            <button onClick={() => fly.current?.home()} className="flex-1 rounded border border-[var(--line)] py-1 text-[11px] hover:bg-white/5">Reset view</button>
-            {facility && <button onClick={() => fly.current?.to(facility.lon, facility.lat, 14.6)} className="flex-1 rounded border border-[var(--line)] py-1 text-[11px] hover:bg-white/5">Locate hospital</button>}
-          </div>
-        </div>
-      </aside>
+          {backendDown && <div className="panel p-2 text-[11px]" style={{ color: 'var(--amber)' }}>Backend not reachable — start it (uvicorn, port 8000). Map exposure still works; simulation panels need the API.</div>}
 
-      {/* right: KPIs */}
-      <aside className="absolute top-[76px] right-3 bottom-10 z-10 flex w-[290px] flex-col gap-3 overflow-y-auto">
-        <div className="panel flex items-center justify-between px-3 py-2">
-          <div>
-            <div className="label">Scenario</div>
-            <div className="text-sm font-semibold">{CATS[cat].label}{cat === 0 ? '' : ' envelope'}</div>
-          </div>
-          <span className="rounded px-1.5 py-0.5 text-[9px] tracking-wider uppercase" style={{ background: 'rgba(251,191,36,.12)', color: 'var(--amber)' }}>Derived · illustrative</span>
-        </div>
-        {s && all ? (
-          <>
-            <div className="grid grid-cols-2 gap-3">
-              <Kpi label="Closed · directed length" value={cat === 0 ? '0' : fmt(s.closedPct)} unit="%" tone={cat === 0 ? undefined : 'coral'} sub={`${fmt(s.closedSegments)} of ${fmt(s.segments)} directed edges · two-way streets count twice`} />
-              <Kpi label="NOAA-valued · directed length" value={cat === 0 ? '0' : fmt(s.exposedPct)} unit="%" tone="cyan" sub={`${fmt(s.exposedKm, 0)} of ${fmt(s.lenKm, 0)} directed-km with any NOAA inundation value; rest is NoData (unknown)`} />
-              <Kpi label="Major edges closed" value={fmt(s.arterialClosed)} unit={`/ ${fmt(s.arterialTotal)}`} tone={s.arterialClosed ? 'coral' : undefined} sub="directed edges: trunk · primary · secondary · tertiary" />
-              <Kpi label="Bridge-exempt" value={fmt(s.bridgesExempt)} tone="amber" sub="would close by raw rule; deck height unknown" />
-            </div>
-            {access && (
-              <Kpi label="Graph nodes with hospital route · provisional" value={fmt(access[cat].nodes_with_route_pct)} unit="%" tone={access[cat].nodes_with_route_pct < 50 ? 'coral' : 'cyan'} sub={`all 1,820 nodes (headline) · ${access[cat].origins_with_route}/${access[cat].origins_sampled} fixed sample origins · one unverified hospital snap; network-bounded, not population coverage`} />
-            )}
-            <Compare all={all} cat={cat} onPick={setCat} access={access} />
-          </>
-        ) : (
-          <div className="panel p-3 text-xs" style={{ color: err ? 'var(--coral)' : 'var(--mute)' }}>{err ?? 'Loading NOAA-derived road exposure…'}</div>
-        )}
-        <Detail sel={selected} cat={cat} onClose={() => setSelected(null)} onLocate={() => facility && fly.current?.to(facility.lon, facility.lat, 14.6)} />
-      </aside>
+          {tab === 'impact' && (s && all ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Kpi label="Closed · directed length" value={cat === 0 ? '0' : fmt(s.closedPct)} unit="%" tone={cat === 0 ? undefined : 'coral'} sub={`${fmt(s.closedSegments)} of ${fmt(s.segments)} directed edges · two-way streets count twice`} />
+                <Kpi label="NOAA-valued · directed length" value={cat === 0 ? '0' : fmt(s.exposedPct)} unit="%" tone="cyan" sub={`${fmt(s.exposedKm, 0)} of ${fmt(s.lenKm, 0)} directed-km with any NOAA inundation value; rest is NoData (unknown)`} />
+                <Kpi label="Major edges closed" value={fmt(s.arterialClosed)} unit={`/ ${fmt(s.arterialTotal)}`} tone={s.arterialClosed ? 'coral' : undefined} sub="directed edges: trunk · primary · secondary · tertiary" />
+                <Kpi label="Bridge-exempt" value={fmt(s.bridgesExempt)} tone="amber" sub="would close by raw rule; deck height unknown" />
+              </div>
+              {access && (
+                <Kpi label="Graph nodes with hospital route · provisional" value={fmt(access[cat].nodes_with_route_pct)} unit="%" tone={access[cat].nodes_with_route_pct < 50 ? 'coral' : 'cyan'} sub={`all 1,820 nodes (headline) · ${access[cat].origins_with_route}/${access[cat].origins_sampled} fixed sample origins · one unverified hospital snap; network-bounded, not population coverage. Zero modeled access ≠ zero real-world care.`} />
+              )}
+              <Compare all={all} cat={cat} onPick={setCat} access={access} />
+              <Detail sel={selected} cat={cat} onClose={() => setSelected(null)} onLocate={() => facility && fly.current?.to(facility.lon, facility.lat, 14.6)} />
+            </>
+          ) : (
+            <div className="panel p-3 text-xs" style={{ color: err ? 'var(--coral)' : 'var(--mute)' }}>{err ?? 'Loading NOAA-derived road exposure…'}</div>
+          ))}
+
+          {tab === 'zones' && <ZonePanel zones={zones} sel={zoneSel} onSel={setZoneSel} cat={cat} applied={applied} />}
+          {tab === 'agents' && <AgentsPanel cat={cat} applied={applied} plan={plan} open={agentOpen} setOpen={setAgentOpen} />}
+          {tab === 'response' && (
+            <ResponsePanel
+              cat={cat} candidates={candidates} applied={applied} recommended={recommended} onToggle={toggle} onSet={setApplied} onFocus={focusCandidate}
+              evalRes={evalRes} evalErr={evalErr} plan={plan} planBusy={planBusy} planErr={planErr} planStatus={planStatus} onGenerate={generate}
+              onCite={(a) => { setAgentOpen(a); setTab('agents') }}
+            />
+          )}
+        </aside>
+      )}
 
       <footer className="absolute bottom-2 left-3 z-10 text-[10px]" style={{ color: 'var(--mute)' }}>
-        <span>Hazard: NOAA NHC SLOSH MOM v4 (Jun 2026) · Roads: © OpenStreetMap contributors{basemap === false ? ' · basemap offline (roads-only mode)' : ' · basemap © CARTO'}</span>
-        <span />
+        <span>Hazard: NOAA NHC SLOSH MOM v4 (Jun 2026) · Roads: © OpenStreetMap contributors{basemap === false ? ' · basemap offline (roads-only mode)' : ' · basemap © CARTO'} · Zones &amp; staging sites are hypothetical demo constructs</span>
       </footer>
       {method && <Method onClose={() => setMethod(false)} />}
     </div>

@@ -6,7 +6,10 @@
 cd backend  && python -m pip install fastapi "uvicorn[standard]" networkx pandas pytest httpx
 cd backend  && python -m uvicorn app.main:app --port 8000
 cd frontend && npm install && npm run dev        # http://localhost:5173 (proxies /api to :8000)
-cd backend  && python -m pytest -q               # engine regression tests
+cd backend  && python -m pytest -q               # backend tests (77)
+cd frontend && npx vitest run                    # frontend data tests
+# Gemma (optional): cp backend/.env.example backend/.env, set GEMMA_API_KEY, then python backend/scripts/gemma_smoke.py
+# Without a key the planner returns a clearly labelled deterministic fallback (not Gemma).
 python scripts/build_map_data.py                 # regenerate frontend/public/data/*.{geojson,json}
 ```
 The map works without the backend; the "Route to hospital" card needs it. Basemap (CARTO) falls back to roads-only if offline.

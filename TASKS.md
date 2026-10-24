@@ -6,33 +6,26 @@ Legend: ✅ done+verified · 🔧 in progress · ⬜ not started · ⚠ blocked
 
 ## Baseline (committed: 7a2d7dc map, b298608 engine)
 - ✅ Map + NOAA-derived road exposure per category, KPIs, inspector, comparison, methodology
-- ✅ Engine reachability + 6 pytest tests (edge counts match `access_summary.csv`)
+- ✅ Engine reachability + tests (edge counts match `access_summary.csv`)
 
-## P1 Data integrity / inspector — owner Lead
-- 🔧 Audit: closure == (bin>=3 & !bridge) holds for all 4,691 edges × 5 cats (verified); direction pairs agree except 6 bridge-related pairs
-- 🔧 Inspector: stop labelling NoData as "open"; show NOAA-valued sample %, "no NOAA value (unknown, not confirmed dry)"; unit tests (vitest)
-- 🔧 KPI labels: directed edges vs length vs sampled origins vs all nodes distinguished
+## P1 Data integrity / inspector — Lead ✅
+- ✅ Audit: closure == (bin>=3 & !bridge) for all 4,691 edges x 5 cats; downtown core genuinely closed in every category (low-lying), open/NoData segments exist elsewhere
+- ✅ Inspector: NoData shown as "NO NOAA VALUE" (unknown, not dry); vitest regression (7 tests)
+- ✅ KPI denominators labelled (directed edges / directed length / all nodes / sample origins)
 
-## P2 Medical validity — owner Simulation teammate (time-boxed), Lead reviews
-- ⬜ Document Flagler snap limitation (hospital lies outside graph; 354 m)
-- ⬜ Regional graph (OSM, covering hospital + downtown) in `data/regional/`, NOAA-sampled with same rule; verified real EDs only from OSM tags; never invent entrances
-- ⬜ If too risky: keep 4 km graph, label "network-bounded, provisional"
+## P2 Medical validity — Simulation teammate ✅ (investigation), decision pending
+- ✅ `docs/MEDICAL_ACCESS.md`: Flagler = OSM way/326113100, centroid 354 m from dead-end Coke Rd node at graph clip edge
+- ✅ Regional graph (6 km, 3,129 nodes / 7,921 edges) in `data/regional/`; sampler reproduces closure flags on 4691/4691 overlapping edges; hospital snaps to 39 m node. Hospital access still 0 at Cat 3-5 (its access roads are NOAA bin>=5). Default API graph stays 4 km. Switching needs zones/candidates re-tuned.
+- ⬜ Decide: keep 4 km default (current) vs regional
 
-## P3 Intervention engine — Simulation teammate
-- ⬜ `interventions.py`, candidates, evaluate/compare endpoints, tests (determinism, category effects, invalid ids, closed edge traversal, consistency)
+## P3 Intervention engine — ✅ (7 hypothetical candidates; evaluate/compare/candidates endpoints; tests)
+## P4 Gemma planner — ✅ code + 49 mocked tests; ⚠ NOT verified against a real Gemma response (no key). Needs `GEMMA_API_KEY` in `backend/.env`, then `python backend/scripts/gemma_smoke.py`
+## P5 Agent modules — ✅ 4 deterministic modules + UI tab; transit marked planned
+## P6 Zones — ✅ 6 provisional zones (hull boundaries, bridge corridor has no polygon), zone impact panel
+## P7 UI — 🔧 tabs, collapsible panels, candidates apply/remove, plan panel, demo nav done; remaining: guided demo script/video flow, loading/error polish, README
 
-## P4 Gemma planner — AI teammate
-- ⬜ `gemma.py` provider, `planner.py` (schema validation, number/ID guards, fallback), `api_plan.py`, tests, `docs/GEMMA.md`
-- ⚠ Needs `GEMMA_API_KEY` in `backend/.env` for real-model verification (mock tests do not need it)
-
-## P5 Agent modules — Simulation teammate (`agents.py`) ; UI by Lead
-- ⬜ Transportation / Medical / Logistics / Community findings; transit marked **planned** (no data)
-
-## P6 Zones — Simulation teammate (backend) ; Lead (map overlay/panel)
-- ⬜ 6 provisional demo zones, zone impact endpoint, map selection + panel
-
-## P7 UI / demo — Lead
-- ⬜ Collapsible panels, candidate markers, apply/remove, Gemma plan panel, agent inspector, guided demo flow, provenance labels
+## Test status
+backend `python -m pytest -q` 77 passed; frontend `npx vitest run` 7 passed.
 
 ## Decisions log
 - Original 100-origin sample unrecoverable; deterministic 102-origin sample (every 18th node by sorted id).

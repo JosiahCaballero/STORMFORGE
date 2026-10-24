@@ -5,6 +5,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 
 maplibregl.setWorkerUrl(workerUrl)
 import { ARTERIAL, type Cat, type Facility, type RoadProps } from '../lib/data'
+import type { Candidate, Zone } from '../lib/api'
 
 export type Selection =
   | { kind: 'road'; props: RoadProps; lngLat: [number, number] }
@@ -57,6 +58,13 @@ interface Props {
   onSelect: (s: Selection) => void
   flyRef: React.MutableRefObject<FlyApi | null>
   onBasemap: (ok: boolean) => void
+  zones: Zone[] | null
+  zoneSel: string | null
+  onZone: (id: string | null) => void
+  candidates: Candidate[] | null
+  applied: string[]
+  recommended: string[]
+  onCandidate: (id: string) => void
 }
 
 function applyCat(map: maplibregl.Map, k: Cat, local: boolean, bridges: boolean) {
@@ -75,12 +83,16 @@ function applyCat(map: maplibregl.Map, k: Cat, local: boolean, bridges: boolean)
   map.setLayoutProperty('bridges', 'visibility', vis(bridges))
 }
 
-export default function MapView({ cat, showLocal, showBridges, facility, selected, onSelect, flyRef, onBasemap }: Props) {
+export default function MapView({ cat, showLocal, showBridges, facility, selected, onSelect, flyRef, onBasemap, zones, zoneSel, onZone, candidates, applied, recommended, onCandidate }: Props) {
   const el = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const ready = useRef(false)
   const markerRef = useRef<maplibregl.Marker | null>(null)
   const latest = useRef({ cat, showLocal, showBridges, facility, onSelect })
+  const zoneMarkers = useRef<maplibregl.Marker[]>([])
+  const candMarkers = useRef<maplibregl.Marker[]>([])
+  const latestAll = useRef({ zones, zoneSel, onZone, candidates, applied, recommended, onCandidate })
+  latestAll.current = { zones, zoneSel, onZone, candidates, applied, recommended, onCandidate }
   latest.current = { cat, showLocal, showBridges, facility, onSelect }
 
   function syncFacility(map: maplibregl.Map, fac: Facility | null) {
@@ -101,6 +113,41 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
       type: 'Feature',
       properties: {},
       geometry: { type: 'LineString', coordinates: [[fac.lon, fac.lat], [fac.snap_lon, fac.snap_lat]] },
+    })
+  }
+
+  function syncZones(map: maplibregl.Map) {
+    const { zones, zoneSel, onZone } = latestAll.current
+    zoneMarkers.current.forEach((m) => m.remove())
+    zoneMarkers.current = []
+    const src = map.getSource('zones') as maplibregl.GeoJSONSource | undefined
+    if (!src || !zones) return
+    src.setData({
+      type: 'FeatureCollection',
+      features: zones.filter((z) => z.boundary).map((z) => ({ type: 'Feature', properties: { id: z.id, name: z.name, sel: z.id === zoneSel ? 1 : 0 }, geometry: z.boundary! })),
+    })
+    zoneMarkers.current = zones.map((z) => {
+      const el = document.createElement('button')
+      el.textContent = z.name + (z.kind === 'infrastructure' ? ' ⌁' : '')
+      el.style.cssText = `font:600 10px/1 IBM Plex Sans,sans-serif;letter-spacing:.12em;text-transform:uppercase;padding:3px 6px;border-radius:4px;border:1px solid ${z.id === zoneSel ? '#22d3ee' : 'rgba(94,234,212,.35)'};background:rgba(6,10,19,.72);color:${z.id === zoneSel ? '#22d3ee' : '#9fe9dc'};cursor:pointer;pointer-events:auto`
+      el.onclick = (ev) => { ev.stopPropagation(); onZone(z.id === latestAll.current.zoneSel ? null : z.id) }
+      return new maplibregl.Marker({ element: el }).setLngLat(z.center).addTo(map)
+    })
+  }
+
+  function syncCandidates(map: maplibregl.Map) {
+    const { candidates, applied, recommended, onCandidate } = latestAll.current
+    candMarkers.current.forEach((m) => m.remove())
+    candMarkers.current = []
+    candidates?.forEach((c) => {
+      const on = applied.includes(c.id)
+      const rec = recommended.includes(c.id)
+      const el = document.createElement('button')
+      el.setAttribute('aria-label', `${c.name} (hypothetical staging) ${on ? 'applied' : 'not applied'}`)
+      el.title = `${c.name} — hypothetical staging site`
+      el.style.cssText = `width:22px;height:22px;transform:rotate(45deg);border-radius:4px;cursor:pointer;border:2px ${on ? 'solid' : 'dashed'} ${on ? '#c4b5fd' : '#a78bfa'};background:${on ? 'rgba(167,139,250,.55)' : 'rgba(11,17,32,.85)'};box-shadow:${rec ? '0 0 0 4px rgba(34,211,238,.35)' : on ? '0 0 14px rgba(167,139,250,.7)' : 'none'}`
+      el.onclick = (ev) => { ev.stopPropagation(); onCandidate(c.id) }
+      candMarkers.current.push(new maplibregl.Marker({ element: el }).setLngLat([c.lon, c.lat]).addTo(map))
     })
   }
 
@@ -142,6 +189,9 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
         line('roads-hover', { 'line-color': '#ffffff', 'line-width': W(3, 8), 'line-opacity': 0.9 }, NONE)
         line('roads-selected', { 'line-color': '#22d3ee', 'line-width': W(4, 10), 'line-opacity': 1 }, NONE)
         line('roads-hit', { 'line-color': '#000000', 'line-width': 14, 'line-opacity': 0 })
+        map.addSource('zones', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        map.addLayer({ id: 'zones-fill', type: 'fill', source: 'zones', paint: { 'fill-color': '#22d3ee', 'fill-opacity': ['case', ['==', ['get', 'sel'], 1], 0.12, 0] } }, 'roads-local')
+        map.addLayer({ id: 'zones-line', type: 'line', source: 'zones', paint: { 'line-color': ['case', ['==', ['get', 'sel'], 1], '#22d3ee', '#5eead4'], 'line-width': ['case', ['==', ['get', 'sel'], 1], 2.2, 1.1], 'line-dasharray': [3, 2], 'line-opacity': ['case', ['==', ['get', 'sel'], 1], 0.9, 0.18] } }, 'roads-local')
         map.addLayer({
           id: 'snap-line', type: 'line', source: 'snap',
           paint: { 'line-color': '#fbbf24', 'line-width': 2, 'line-dasharray': [1, 1.5] },
@@ -159,18 +209,26 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
         map.on('click', (e) => {
           const hit = map.queryRenderedFeatures(e.point, { layers: ['roads-hit'] })[0]
           if (hit) latest.current.onSelect({ kind: 'road', props: hit.properties as RoadProps, lngLat: [e.lngLat.lng, e.lngLat.lat] })
-          else latest.current.onSelect(null)
+          else {
+            latest.current.onSelect(null)
+            const z = map.queryRenderedFeatures(e.point, { layers: ['zones-fill'] })[0]
+            latestAll.current.onZone((z?.properties?.id as string | undefined) ?? null)
+          }
         })
         ready.current = true
         const l = latest.current
         applyCat(map, l.cat, l.showLocal, l.showBridges)
         syncFacility(map, l.facility)
+        syncZones(map)
+        syncCandidates(map)
       })
     })
     return () => {
       dead = true
       ready.current = false
       markerRef.current?.remove()
+      zoneMarkers.current.forEach((m) => m.remove())
+      candMarkers.current.forEach((m) => m.remove())
       mapRef.current?.remove()
       mapRef.current = null
     }
@@ -187,6 +245,18 @@ export default function MapView({ cat, showLocal, showBridges, facility, selecte
     if (map && ready.current) syncFacility(map, facility)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facility])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && ready.current) syncZones(map)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zones, zoneSel])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && ready.current) syncCandidates(map)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidates, applied, recommended])
 
   useEffect(() => {
     const map = mapRef.current

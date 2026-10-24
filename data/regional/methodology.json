@@ -1,0 +1,13 @@
+{
+  "study_area": "St. Augustine, FL; REGIONAL OSM drive network, 6000 m around (29.885,-81.315); bbox lat 29.8311..29.9383, lon -81.3771..-81.2654. EXPERIMENTAL / PROVISIONAL.",
+  "noaa_input": "2026 reprocessed NOAA SLOSH MOM HIGH tide category 1-5 crops",
+  "noaa_interpretation": "potential planning-envelope inundation, NOT a storm forecast",
+  "noaa_nodata": "255 means NoData, NOT confirmed dry",
+  "closure_rule": "At least one sample every ~20m has NOAA depth class >= 3 (lower bound 2ft)",
+  "bridge_rule": "OSM bridge=yes edges exempt from water-depth closure; bridge approaches not exempt; NOT a structural safety assessment",
+  "routing": "directed OSM driving graph, shortest path by road length (not ambulance travel time)",
+  "origins": "every 18th node by sorted id (Engine rule); NOT population-weighted and NOT the same nodes as the 4 km graph",
+  "facilities": "OSM amenity=hospital / emergency=yes elements in bbox (Overpass); emergency-department entrances NOT verified; snap distance reported in facilities.csv",
+  "limitations": "No actual storm timeline, rainfall, bridge deck heights, wind effects, congestion, emergency speeds, population, or official road closures.",
+  "regional_note": "Same closure rule as data/access; sampler validated against data/access/directed_edges.csv (see docs/MEDICAL_ACCESS.md)."
+}
