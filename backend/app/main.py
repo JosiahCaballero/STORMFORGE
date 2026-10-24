@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from .api_alloc import router as alloc_router
 from .api_plan import router as plan_router
 from .api_sim import router as sim_router
 from .api_viz import router as viz_router
@@ -19,6 +20,21 @@ engine = Engine.load()
 app.include_router(sim_router)
 app.include_router(plan_router)
 app.include_router(viz_router)
+app.include_router(alloc_router)
+
+
+@app.on_event("startup")
+def _warm_allocation_cache():
+    """Debris generation for each category takes a few seconds the first time; do it in the background at startup."""
+    import threading
+
+    def run():
+        from .allocation import default_model
+        m = default_model()
+        for c in (3, 2, 4, 1, 5):
+            m.setup(c)
+
+    threading.Thread(target=run, daemon=True).start()
 
 ATTRIBUTION = [
     "Hazard: NOAA NHC National Storm Surge Risk Maps v4, SLOSH MOM HIGH-tide inundation (June 2026 reprocessing), Categories 1-5",
