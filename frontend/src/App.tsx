@@ -51,25 +51,36 @@ function Legend() {
   )
 }
 
-function Compare({ all, cat, onPick }: { all: CatStats[]; cat: Cat; onPick: (c: Cat) => void }) {
+interface Access { category: number; nodes_with_route_pct: number; origins_with_route: number; origins_sampled: number }
+
+function Compare({ all, cat, onPick, access }: { all: CatStats[]; cat: Cat; onPick: (c: Cat) => void; access: Access[] | null }) {
+  const [mode, setMode] = useState<'roads' | 'access'>('roads')
+  const val = (id: Cat) => (mode === 'roads' || !access ? all[id].closedPct : access[id].nodes_with_route_pct)
   return (
     <div className="panel p-3">
-      <div className="label mb-2">Scenario comparison · roads closed (by length)</div>
+      <div className="mb-2 flex gap-1.5">
+        {(['roads', 'access'] as const).map((m) => (
+          <button key={m} onClick={() => setMode(m)} className="rounded px-2 py-0.5 text-[10px] tracking-wider uppercase" style={{ background: mode === m ? 'rgba(34,211,238,.14)' : 'transparent', color: mode === m ? 'var(--cyan)' : 'var(--mute)' }}>
+            {m === 'roads' ? 'Roads closed' : 'Route to hospital*'}
+          </button>
+        ))}
+      </div>
       <div className="space-y-1">
         {CATS.map((c) => {
-          const s = all[c.id]
+          const s = { closedPct: val(c.id) }
           const on = c.id === cat
           return (
-            <button key={c.id} onClick={() => onPick(c.id)} className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/5" aria-label={`${c.label}: ${fmt(s.closedPct, 1)} percent closed`}>
+            <button key={c.id} onClick={() => onPick(c.id)} className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/5" aria-label={`${c.label}: ${fmt(s.closedPct, 1)} percent`}>
               <span className="mono w-11 text-[10px]" style={{ color: on ? 'var(--cyan)' : 'var(--mute)' }}>{c.short}</span>
               <span className="h-2.5 flex-1 overflow-hidden rounded-sm" style={{ background: '#141d33' }}>
-                <span className="block h-full rounded-sm transition-all duration-500" style={{ width: `${s.closedPct}%`, background: on ? 'var(--coral)' : '#7a3a4c' }} />
+                <span className="block h-full rounded-sm transition-all duration-500" style={{ width: `${s.closedPct}%`, background: mode === 'access' ? (on ? 'var(--cyan)' : '#245a66') : on ? 'var(--coral)' : '#7a3a4c' }} />
               </span>
               <span className="mono w-11 text-right text-[11px]" style={{ color: on ? 'var(--ink)' : 'var(--mute)' }}>{fmt(s.closedPct)}%</span>
             </button>
           )
         })}
       </div>
+      {mode === 'access' && <div className="mt-2 text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>*% of 1,820 graph nodes with an open directed route to the OSM-tagged hospital's nearest node. PROVISIONAL: single unverified destination, node ~356 m away; not population coverage.</div>}
     </div>
   )
 }
@@ -160,10 +171,12 @@ export default function App() {
   const [basemap, setBasemap] = useState<boolean | null>(null)
   const [method, setMethod] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [access, setAccess] = useState<Access[] | null>(null)
   const fly = useRef<FlyApi | null>(null)
 
   useEffect(() => {
     fetch('/data/roads.geojson').then((r) => r.json()).then(setRoads).catch((e) => setErr(String(e)))
+    fetch('/api/v1/scenarios').then((r) => r.json()).then(setAccess).catch(() => setAccess(null))
     fetch('/data/facilities.json').then((r) => r.json()).then((f: Facility[]) => setFacility(f[0] ?? null)).catch(() => {})
   }, [])
 
@@ -247,7 +260,10 @@ export default function App() {
               <Kpi label="Major roads out" value={fmt(s.arterialClosed)} unit={`/ ${fmt(s.arterialTotal)}`} tone={s.arterialClosed ? 'coral' : undefined} sub="trunk · primary · secondary · tertiary" />
               <Kpi label="Bridge-exempt" value={fmt(s.bridgesExempt)} tone="amber" sub="would close by raw rule; deck height unknown" />
             </div>
-            <Compare all={all} cat={cat} onPick={setCat} />
+            {access && (
+              <Kpi label="Route to hospital · provisional" value={fmt(access[cat].nodes_with_route_pct)} unit="% of nodes" tone={access[cat].nodes_with_route_pct < 50 ? 'coral' : 'cyan'} sub={`${access[cat].origins_with_route}/${access[cat].origins_sampled} sample origins · simulated, single unverified destination`} />
+            )}
+            <Compare all={all} cat={cat} onPick={setCat} access={access} />
           </>
         ) : (
           <div className="panel p-3 text-xs" style={{ color: err ? 'var(--coral)' : 'var(--mute)' }}>{err ?? 'Loading NOAA-derived road exposure…'}</div>

@@ -8,3 +8,4 @@ __pycache__/
 *.log
 .dev.log
 .prev.log
+.api.log
