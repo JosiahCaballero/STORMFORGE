@@ -19,13 +19,13 @@ Legend: ✅ done+verified · 🔧 in progress · ⬜ not started · ⚠ blocked
 - ⬜ Decide: keep 4 km default (current) vs regional
 
 ## P3 Intervention engine — ✅ (7 hypothetical candidates; evaluate/compare/candidates endpoints; tests)
-## P4 Gemma planner — ✅ code + 49 mocked tests; ⚠ NOT verified against a real Gemma response (no key). Needs `GEMMA_API_KEY` in `backend/.env`, then `python backend/scripts/gemma_smoke.py`
+## P4 Gemma planner — ✅ verified live (gemma-4-26b-a4b-it, thinkingLevel=minimal, ~7-10 s). Evidence now has sequential marginals (recomputed after each pick), per-zone impact of the greedy plan; validator rejects redundant sites (<5 new nodes) and zone claims contradicting the recommended set; response carries backend `sequential_marginals` + `zone_impact`
 ## P5 Agent modules — ✅ 4 deterministic modules + UI tab; transit marked planned
 ## P6 Zones — ✅ 6 provisional zones (hull boundaries, bridge corridor has no polygon), zone impact panel
 ## P7 UI — 🔧 tabs, collapsible panels, candidates apply/remove, plan panel, demo nav done; remaining: guided demo script/video flow, loading/error polish, README
 
 ## Test status
-backend `python -m pytest -q` 77 passed; frontend `npx vitest run` 7 passed.
+backend `python -m pytest -q` 94 passed; frontend `npx vitest run` 7 passed.
 
 ## Decisions log
 - Original 100-origin sample unrecoverable; deterministic 102-origin sample (every 18th node by sorted id).

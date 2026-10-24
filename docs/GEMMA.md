@@ -60,3 +60,13 @@ empty `limitations_ack`. The facility check is heuristic (can false-positive; th
 - `thinkingConfig.thinkingBudget` is rejected (HTTP 400 "not supported for this model"); `thinkingLevel: "minimal"` works
   (~10 s, valid JSON). The adapter now sends `thinkingLevel` (env `GEMMA_THINKING_LEVEL`, default `minimal`) and defaults to 26b-a4b.
 - Occasional transient HTTP 500 "Internal error encountered" from the API; the adapter retries once.
+
+## Sequential marginals, redundancy and zone-claim validation (2026-10-24)
+- Evidence no longer contains standalone scores. `greedy_sequence` and `marginal_gains_by_step` are recomputed by NetworkX after every pick.
+- Agent findings that describe the applied set (`community.zones_improved`, `medical.no_staging_applied`, ...) are withheld: the evidence is built with no
+  sites applied, so they described the baseline. Plan-specific zone impact (`zone_impact_of_greedy_sequence`) replaces them.
+- Validator (after structure checks): sites in rank order must each add >= 5 new any-care nodes (`redundant_site`); zone-count claims ("N of M zones"),
+  "no/all zones" claims and per-zone gain/no-gain sentences are checked against the backend's per-zone result for the *recommended* set
+  (`zone_claim_contradiction`, heuristic keyword matching, may over-reject; one repair retry then deterministic fallback).
+- Response adds backend-owned `verified.sequential_marginals` and `verified.zone_impact`.
+- Live check (Cat 3, real Gemma): recommended 1 site (`stage_uptown_san_marco_2`, +504 nodes); the other six each add <=1 node after it (verified by direct engine calls); latency 7.5 s.

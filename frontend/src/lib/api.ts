@@ -94,7 +94,12 @@ export interface PlanResponse {
     limitations_ack: string
   }
   validation: { ok: boolean; rejected: { reason: string; detail: string }[]; repairs: unknown[] }
-  verified: { evaluate: EvalResult }
+  verified: {
+    evaluate: EvalResult
+    sequential_marginals: { step: number; candidate_id: string; marginal_nodes: number; marginal_origins: number; cumulative_nodes: number; meets_minimum: boolean }[]
+    zone_impact: { zone_id: string; zone_name: string; zone_nodes: number; baseline_any_care_nodes: number; after_any_care_nodes: number; gained_nodes: number; improved: boolean }[]
+    min_marginal_nodes_per_site: number
+  }
 }
 
 async function j<T>(r: Response): Promise<T> {

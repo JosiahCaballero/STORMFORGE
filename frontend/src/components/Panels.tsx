@@ -114,6 +114,10 @@ export function ResponsePanel(props: {
                       {rec && <Badge tone="cyan">recommended</Badge>}
                     </div>
                     <div className="mt-0.5 leading-snug" style={{ color: 'var(--mute)' }}>{r.rationale}</div>
+                    {(() => {
+                      const m = plan.verified.sequential_marginals.find((x) => x.candidate_id === r.candidate_id)
+                      return m ? <div className="mono mt-1 text-[10px]" style={{ color: 'var(--cyan)' }}>backend: +{fmt(m.marginal_nodes)} new nodes after sites above it</div> : null
+                    })()}
                   </li>
                 )
               })}
@@ -136,6 +140,16 @@ export function ResponsePanel(props: {
             <div className="rounded p-2" style={{ background: 'rgba(34,211,238,.06)' }}>
               <div className="label mb-1">Independently verified by NetworkX (not by Gemma)</div>
               <MetricsBars base={plan.verified.evaluate.baseline} now={plan.verified.evaluate.intervention} />
+              <div className="label mt-2 mb-1">Zone impact of this plan · any-care nodes</div>
+              <ul className="mono space-y-0.5 text-[10px]">
+                {plan.verified.zone_impact.map((z) => (
+                  <li key={z.zone_id} className="flex justify-between" style={{ color: z.improved ? 'var(--ink)' : 'var(--mute)' }}>
+                    <span>{z.zone_name}</span>
+                    <span>{fmt(z.baseline_any_care_nodes)} → <b style={{ color: z.improved ? '#4ade80' : undefined }}>{fmt(z.after_any_care_nodes)}</b> / {fmt(z.zone_nodes)}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-1 text-[9px]" style={{ color: 'var(--mute)' }}>Sites must add ≥ {plan.verified.min_marginal_nodes_per_site} new reachable nodes beyond those above them.</div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => props.onSet(plan.plan.recommended_ids)} className="flex-1 rounded border border-[var(--cyan)] py-1.5 text-[var(--cyan)] hover:bg-[rgba(34,211,238,.12)]">Apply plan</button>

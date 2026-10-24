@@ -80,30 +80,108 @@ class Sim:
 
 
 # ---------------------------------------------------------------- evidence
+MIN_NODE_GAIN = 5  # minimum marginal graph-node gain for a site to be recommended (fallback AND validator)
+# Agent findings that describe "the currently applied staging set". The evidence is built with NO sites applied, so these
+# would describe the baseline, not the plan being proposed; they are withheld and replaced by plan-specific zone evidence.
+STALE_FINDINGS = {"community.zones_improved", "medical.no_staging_applied", "logistics.candidates_applied",
+                  "medical.staging_origins", "medical.any_care_gain"}
+
+
+def _g(ev: dict, key: str) -> int:
+    return int(ev["delta"].get(key, 0))
+
+
+def zone_names() -> dict[str, str]:
+    try:
+        from .zones import ZONE_DEFS
+        return {z[0]: z[1] for z in ZONE_DEFS}
+    except Exception:  # fakes / missing module
+        return {}
+
+
+def zone_rows(ev: dict) -> list[dict]:
+    """Per-zone before/after for an evaluate_plan result (backend-computed)."""
+    names = zone_names()
+    rows = []
+    for z in ev.get("per_zone") or []:
+        base, after = int(z["baseline_any_care_nodes"]), int(z["intervention_any_care_nodes"])
+        rows.append({"zone_id": z["zone_id"], "zone_name": names.get(z["zone_id"]) or z["zone_id"].replace("_", " ").title(),
+                     "zone_nodes": int(z["zone_nodes"]), "baseline_any_care_nodes": base, "after_any_care_nodes": after,
+                     "gained_nodes": after - base, "improved": after > base})
+    return rows
+
+
+def sequential_marginals(cat: int, ordered_ids: list[str], sim: Sim) -> list[dict]:
+    """Marginal gain of each site given the sites BEFORE it in ordered_ids (recomputed on each prefix)."""
+    out, prev_n, prev_o = [], 0, 0
+    for k in range(len(ordered_ids)):
+        ev = sim.evaluate_plan(cat, ordered_ids[: k + 1])
+        n, o = _g(ev, SCORE_KEY), _g(ev, "origins_with_any_care_route")
+        out.append({"step": k + 1, "candidate_id": ordered_ids[k], "marginal_nodes": n - prev_n, "marginal_origins": o - prev_o,
+                    "cumulative_nodes": n, "cumulative_origins": o, "meets_minimum": (n - prev_n) >= MIN_NODE_GAIN})
+        prev_n, prev_o = n, o
+    return out
+
+
+def greedy_sequence(cat: int, max_candidates: int, sim: Sim) -> tuple[list[dict], list[dict]]:
+    """Greedy selection, recomputing every remaining candidate's marginal gain AFTER each pick (never standalone scores).
+    Returns (steps, remaining) where remaining[k] = marginals of the unchosen candidates after k picks.
+    Ties -> larger origin gain, then lexicographically smaller id. Stops when the best marginal < MIN_NODE_GAIN."""
+    ids = sorted(c["id"] for c in sim.list_candidates())
+    chosen: list[str] = []
+    steps: list[dict] = []
+    remaining: list[dict] = []
+    cur_n = cur_o = 0
+    while True:
+        rows = []
+        for i in ids:
+            if i in chosen:
+                continue
+            ev = sim.evaluate_plan(cat, chosen + [i])
+            n, o = _g(ev, SCORE_KEY), _g(ev, "origins_with_any_care_route")
+            rows.append((n - cur_n, o - cur_o, i, n, o))
+        remaining.append({"after_picks": len(chosen), "candidate_marginals": [{"candidate_id": r[2], "marginal_nodes": r[0]} for r in rows]})
+        if not rows or len(chosen) >= max_candidates:
+            break
+        best = sorted(rows, key=lambda r: (-r[0], -r[1], r[2]))[0]
+        if best[0] < MIN_NODE_GAIN:
+            break
+        chosen.append(best[2])
+        cur_n, cur_o = best[3], best[4]
+        steps.append({"step": len(chosen), "candidate_id": best[2], "marginal_nodes": best[0], "marginal_origins": best[1],
+                      "cumulative_nodes": cur_n, "cumulative_origins": cur_o})
+    return steps, remaining
+
+
 def build_evidence(cat: int, max_candidates: int, sim: Sim) -> dict:
     cands = sim.list_candidates()
     base = sim.evaluate_plan(cat, [])
     report = sim.build_report(cat, [])
-    standalone = []
-    for c in cands:
-        ev = sim.evaluate_plan(cat, [c["id"]])
-        standalone.append({"candidate_id": c["id"], "delta_vs_baseline_if_applied_alone": ev["delta"]})
+    steps, remaining = greedy_sequence(cat, max_candidates, sim)
+    greedy_ids = [s["candidate_id"] for s in steps]
+    gz = zone_rows(sim.evaluate_plan(cat, greedy_ids)) if greedy_ids else zone_rows(base)
     agents = {}
     for a in AGENTS:
         f = report.get(a) or {}
         agents[a] = {
             "headline": f.get("headline"),
             "findings": [{k: x.get(k) for k in ("id", "text", "value", "unit") if x.get(k) is not None}
-                         for x in f.get("findings", [])],
+                         for x in f.get("findings", []) if x.get("id") not in STALE_FINDINGS],
             "limitations": f.get("limitations", []),
         }
     return {
         "category": cat,
         "max_candidates": max_candidates,
+        "min_marginal_nodes_per_site": MIN_NODE_GAIN,
         "baseline_metrics": base["baseline"],
         "candidates": [{"id": c["id"], "name": c.get("name"), "zone_id": c.get("zone_id"),
                         "kind": c.get("kind"), "provenance": c.get("provenance")} for c in cands],
-        "standalone_scores": standalone,
+        "marginal_gains_by_step": remaining,
+        "greedy_sequence": steps,
+        "zone_impact_of_greedy_sequence": {
+            "sites": greedy_ids, "zones_total": len(gz), "zones_improved": sum(1 for z in gz if z["improved"]), "zones": gz,
+        },
+        "agent_reports_scope": "baseline with NO staging sites applied; says nothing about any recommended set",
         "agent_reports": agents,
     }
 
@@ -118,6 +196,10 @@ def build_prompt(evidence: dict, repair: list[dict] | None = None, previous: str
         "- ranked: every candidate you consider, best first, rank = 1,2,3...; candidate_id copied exactly.\n"
         "- agent_citations: [{agent, finding_id}] copied exactly from evidence.agent_reports (agent in transportation|medical|logistics|community).\n"
         "- Do NOT output coordinates, new facility/place names, or any metric you computed yourself.\n"
+        f"- REDUNDANCY: every site you recommend, taken in rank order, must add at least {MIN_NODE_GAIN} NEW reachable nodes beyond the sites ranked above it "
+        "(see evidence.marginal_gains_by_step, recomputed after each pick, and evidence.greedy_sequence). Do not recommend a site whose marginal gain is below that; fewer sites is fine.\n"
+        "- ZONES: any statement about which zones gain access must match evidence.zone_impact_of_greedy_sequence if you recommend exactly evidence.greedy_sequence; "
+        "otherwise do not make zone-count or per-zone claims. evidence.agent_reports describe the BASELINE with no sites applied, never the recommended plan.\n"
         "- Avoid digits in free text. If you use a number it must be copied verbatim from the evidence.\n"
         "- Staging sites are hypothetical basic-care staging, never hospitals. State limits honestly in limitations_ack.\n"
         "- Output ONLY one JSON object, no markdown, with exactly these keys:\n"
@@ -139,6 +221,11 @@ _COORD = re.compile(r"-?\d{1,3}\.\d{3,}")
 _FAC_KW = (r"Hospital|Medical Center|Medical Centre|Clinic|Shelter|School|Fire Station|Police Station|Station|Library|"
            r"Church|Park|Airport|Center|Centre|Bridge|Hall|Fort|Pier|Marina|Stadium|University|College")
 _FAC = re.compile(rf"((?:[A-Z][\w.'&-]*\s+){{1,5}}(?:{_FAC_KW}))\b")
+_ZONE_COUNT = re.compile(r"\b(\d+)\s+(?:out\s+)?of\s+(?:the\s+)?(\d+)\s+(?:provisional\s+|analysis\s+|demo\s+)?zones?\b")
+_NO_ZONES = re.compile(r"\b(?:no|zero|none of the|0)\s+(?:provisional\s+|analysis\s+|demo\s+)?zones?\b")
+_ALL_ZONES = re.compile(r"\ball\s+(?:\w+\s+)?zones\b")
+_NEG = re.compile(r"\b(?:no\s+(?:gain|improvement|benefit|access)|not\b|nothing|none\b|unchanged|without|cut off|remains?\s+(?:cut|isolated|unreachable)|no\s+change)")
+_POS = re.compile(r"\b(?:gain\w*|improv\w*|benefit\w*|increas\w*|reach\w*|serv\w*|cover\w*|restor\w*)\b")
 _STOP = {"the", "a", "an", "this", "that", "these", "those", "both", "all", "each", "any", "our", "its", "their", "for",
          "to", "and", "of", "in", "at", "on", "with", "from", "by", "prioritize", "prioritise", "recommend", "select",
          "activate", "use", "staging", "also", "but", "while", "if", "as", "near", "new", "other", "nearest"}
@@ -171,7 +258,8 @@ def _walk(o: Any, nums: set[float], strs: list[str]) -> None:
 
 
 class Validator:
-    def __init__(self, evidence: dict):
+    def __init__(self, evidence: dict, sim: Sim | None = None):
+        self.sim = sim
         self.ev = evidence
         self.max = int(evidence["max_candidates"])
         self.cat = int(evidence["category"])
@@ -247,49 +335,73 @@ class Validator:
             self.check_text(where, text, rej)
         if not plan.limitations_ack.strip():
             rej.append({"reason": "missing_limitations_ack", "detail": "empty"})
+        if not rej and self.sim is not None:
+            self.semantic_checks(plan, rej)
         return (None if rej else plan), rej
+
+    # ---- semantic checks against the backend's own recomputation (only run once the structure is valid)
+    def semantic_checks(self, plan: Plan, rej: list[dict]) -> None:
+        rank = {r.candidate_id: r.rank for r in plan.ranked}
+        order = sorted(plan.recommended_ids, key=lambda i: rank[i])
+        seq = sequential_marginals(self.cat, order, self.sim)
+        for st in seq:
+            if not st["meets_minimum"]:
+                before = order[: st["step"] - 1]
+                rej.append({"reason": "redundant_site", "detail":
+                            f"{st['candidate_id']} adds only {st['marginal_nodes']} new reachable nodes"
+                            + (f" beyond {before}" if before else "") + f" (minimum {MIN_NODE_GAIN}); drop it or reorder. "
+                            f"evidence.greedy_sequence = {[g['candidate_id'] for g in self.ev.get('greedy_sequence', [])]}"})
+        ev = self.sim.evaluate_plan(self.cat, order)
+        zr = zone_rows(ev)
+        if zr:
+            self.check_zone_claims(plan, zr, rej)
+
+    def check_zone_claims(self, plan: Plan, zr: list[dict], rej: list[dict]) -> None:
+        improved = [z for z in zr if z["improved"]]
+        truth = (f"For the recommended set, {len(improved)} of {len(zr)} zones gain any-care nodes "
+                 f"({', '.join(z['zone_name'] for z in improved) or 'none'}); no gain: "
+                 f"{', '.join(z['zone_name'] for z in zr if not z['improved']) or 'none'}")
+        for where, text in self._texts(plan):
+            masked = text
+            for m in self.mask:
+                masked = re.sub(re.escape(m), " ", masked, flags=re.I)
+            low = masked.lower()
+            for m in _ZONE_COUNT.finditer(low):
+                if int(m.group(1)) != len(improved) or int(m.group(2)) != len(zr):
+                    rej.append({"reason": "zone_claim_contradiction", "detail": f"{where}: says '{m.group(0)}'. {truth}"})
+            if improved and _NO_ZONES.search(low):
+                rej.append({"reason": "zone_claim_contradiction", "detail": f"{where}: claims no zone gains. {truth}"})
+            if len(improved) < len(zr) and _ALL_ZONES.search(low):
+                rej.append({"reason": "zone_claim_contradiction", "detail": f"{where}: claims all zones gain. {truth}"})
+            for sent in re.split(r"[.;\n]", low):
+                neg, pos = bool(_NEG.search(sent)), bool(_POS.search(sent))
+                for z in zr:
+                    aliases = {z["zone_name"].lower(), z["zone_id"].replace("_", " "), z["zone_name"].lower().split(" /")[0]}
+                    if not any(a and re.search(rf"\b{re.escape(a)}\b", sent) for a in aliases):
+                        continue
+                    if z["improved"] and neg:
+                        rej.append({"reason": "zone_claim_contradiction", "detail": f"{where}: says {z['zone_name']} does not gain, but it gains {z['gained_nodes']} nodes. {truth}"})
+                    elif not z["improved"] and pos and not neg:
+                        rej.append({"reason": "zone_claim_contradiction", "detail": f"{where}: says {z['zone_name']} gains/benefits, but it has no gain. {truth}"})
 
 
 # ---------------------------------------------------------------- deterministic fallback
-MIN_NODE_GAIN = 5  # minimum marginal graph-node gain for the deterministic fallback to recommend a site
-
-
-def _gain(ev: dict) -> tuple[int, int]:
-    d = ev["delta"]
-    return int(d.get(SCORE_KEY, 0)), int(d.get("origins_with_any_care_route", 0))
-
-
 def deterministic_plan(cat: int, max_candidates: int, sim: Sim, evidence: dict | None = None) -> dict:
-    """Greedy marginal-benefit selection with evaluate_plan. Ties broken by candidate id. Pure function."""
-    ids = sorted(c["id"] for c in sim.list_candidates())
-    chosen: list[str] = []
-    gains: dict[str, tuple[int, int]] = {}
-    while len(chosen) < max_candidates:
-        best = None
-        for i in ids:
-            if i in chosen:
-                continue
-            g = _gain(sim.evaluate_plan(cat, chosen + [i]))
-            prev = _gain(sim.evaluate_plan(cat, chosen)) if chosen else (0, 0)
-            m = (g[0] - prev[0], g[1] - prev[1])
-            if best is None or m > best[0]:
-                best = (m, i)
-        # stop when the next site adds fewer than MIN_NODE_GAIN nodes: a +1 'gain' is just the site itself, not an improvement
-        if best is None or best[0][0] < MIN_NODE_GAIN:
-            break
-        chosen.append(best[1])
-        gains[best[1]] = best[0]
+    """Greedy marginal-benefit selection; marginals are recomputed after every pick. Pure function."""
+    steps, _ = greedy_sequence(cat, max_candidates, sim)
+    chosen = [st["candidate_id"] for st in steps]
     names = {c["id"]: c.get("name") or c["id"] for c in sim.list_candidates()}
-    ranked = [{"candidate_id": i, "rank": n + 1,
-               "rationale": f"Selected greedily: adds {gains[i][0]} graph nodes with a route to care "
-                            f"({gains[i][1]} sampled origins) beyond the sites ranked above it. Computed by the simulator."}
-              for n, i in enumerate(chosen)]
+    ranked = [{"candidate_id": st["candidate_id"], "rank": st["step"],
+               "rationale": f"Selected greedily: adds {st['marginal_nodes']} graph nodes with a route to care "
+                            f"({st['marginal_origins']} sampled origins) beyond the sites ranked above it. Computed by the simulator."}
+              for st in steps]
     return {
         "summary": (f"Greedy marginal-benefit selection of {len(chosen)} hypothetical staging site(s) for category {cat}: "
-                    + (", ".join(names[i] for i in chosen) if chosen else "no site improves modeled access") + "."),
+                    + (", ".join(names[i] for i in chosen) if chosen else "no site adds enough new reachable nodes") + "."),
         "ranked": ranked,
         "recommended_ids": chosen,
-        "tradeoffs": ["Greedy selection is not guaranteed optimal and ignores cost, staffing and real-world feasibility.",
+        "tradeoffs": [f"A site is only recommended if it adds at least {MIN_NODE_GAIN} reachable nodes beyond the sites already chosen.",
+                      "Greedy selection is not guaranteed optimal and ignores cost, staffing and real-world feasibility.",
                       "Staging sites provide basic care only; they are not hospitals and are hypothetical."],
         "agent_citations": [],
         "limitations_ack": "Deterministic heuristic over a provisional road graph; hypothetical sites; simulated metrics, not for real emergency decisions.",
@@ -317,12 +429,16 @@ def clear_cache() -> None:
 
 
 def _response(cat, source, model, reason, latency, plan, validation, sim) -> dict:
+    rank = {r["candidate_id"]: r["rank"] for r in plan.get("ranked", [])}
+    order = sorted(plan["recommended_ids"], key=lambda i: rank.get(i, 10**6))
+    final = sim.evaluate_plan(cat, order)
     label = f"Real Gemma response (model {model})" if source == "gemma" else FALLBACK_LABEL
     return {
         "category": cat, "source": source, "source_label": label,
         "model": model if source == "gemma" else None,
         "fallback_reason": reason, "latency_ms": latency, "plan": plan, "validation": validation,
-        "verified": {"evaluate": sim.evaluate_plan(cat, plan["recommended_ids"])},
+        "verified": {"evaluate": final, "sequential_marginals": sequential_marginals(cat, order, sim) if order else [],
+                     "zone_impact": zone_rows(final), "min_marginal_nodes_per_site": MIN_NODE_GAIN},
     }
 
 
@@ -350,7 +466,7 @@ def generate_plan(cat: int, max_candidates: int = 3, *, client: GemmaClient | No
             return hit
 
     evidence = build_evidence(cat, max_candidates, sim)
-    validator = Validator(evidence)
+    validator = Validator(evidence, sim)
     rejected: list[dict] = []
     repairs: list[str] = []
     prompt = build_prompt(evidence)

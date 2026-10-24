@@ -10,3 +10,4 @@ __pycache__/
 .prev.log
 .api.log
 .api.err
+.last_plan.json

@@ -13,8 +13,11 @@ from app.planner import FALLBACK_LABEL, Sim
 
 KEY = "AIzaSyFAKEKEYFAKEKEYFAKEKEYFAKEKEY12345"
 
-COVER = {"c_a": {1, 2, 3, 4, 5}, "c_b": {4, 5, 6}, "c_c": {7}, "c_d": {1, 2}}
-NAMES = {"c_a": "Alpha Staging Point", "c_b": "Bravo Staging Point", "c_c": "Charlie Staging Point", "c_d": "Delta Staging Point"}
+# node coverage per candidate. c_c is a subset of c_a (redundant), c_e overlaps c_a heavily (4 new nodes after c_a),
+# c_e is bigger than c_b STANDALONE but worse once c_a is chosen -> separates standalone from sequential marginals.
+COVER = {"c_a": set(range(1, 11)), "c_b": set(range(11, 19)), "c_c": {1, 2, 3}, "c_d": {20, 21}, "c_e": set(range(6, 15))}
+ZONES = {"zone_a": range(1, 11), "zone_b": range(11, 20), "zone_c": range(20, 30)}
+NAMES = {"c_a": "Alpha Staging Point", "c_b": "Bravo Staging Point", "c_c": "Charlie Staging Point", "c_d": "Delta Staging Point", "c_e": "Echo Staging Point"}
 BASE_NODES = 100
 
 
@@ -33,15 +36,21 @@ def fake_eval(cat, ids):
     ids = list(dict.fromkeys(ids))
     s = set().union(*[COVER[i] for i in ids]) if ids else set()
     b, i = metrics(0), metrics(len(s))
+    per_zone = [{"zone_id": z, "baseline_any_care_nodes": 0, "intervention_any_care_nodes": len(s & set(r)), "zone_nodes": 30}
+                for z, r in ZONES.items()]
     return {"category": cat, "candidate_ids": ids, "baseline": b, "intervention": i,
-            "delta": {k: i[k] - b[k] for k in b if k != "provenance"}, "provenance": "simulated"}
+            "delta": {k: i[k] - b[k] for k in b if k != "provenance"}, "per_zone": per_zone, "provenance": "simulated"}
 
 
 def fake_report(cat, ids):
     f = lambda a: {"agent": a, "headline": f"{a} headline", "limitations": ["Provisional graph."],  # noqa: E731
                    "findings": [{"id": f"{a}.f1", "text": f"{a} sees 1820 nodes in the graph", "value": 1820, "unit": "nodes",
                                  "provenance": "simulated"}]}
-    return {"category": cat, **{a: f(a) for a in planner.AGENTS}}
+    rep = {"category": cat, **{a: f(a) for a in planner.AGENTS}}
+    # a finding that describes the applied set (baseline-only here) -> must be withheld from the evidence
+    rep["community"]["findings"].append({"id": "community.zones_improved", "text": "0 of 3 provisional zones gain any-care access from the applied staging.",
+                                         "value": 0, "unit": "zones", "provenance": "simulated"})
+    return rep
 
 
 def sim():
@@ -100,7 +109,7 @@ def test_valid_response_uses_evaluator_metrics():
     assert out["source"] == "gemma" and out["source_label"] == "Real Gemma response (model gemma-test)"
     assert out["fallback_reason"] is None and out["validation"]["ok"]
     assert out["verified"]["evaluate"] == fake_eval(3, ["c_a", "c_b"])
-    assert out["verified"]["evaluate"]["delta"]["nodes_with_any_care_route"] == 6
+    assert out["verified"]["evaluate"]["delta"]["nodes_with_any_care_route"] == 18  # 10 (c_a) + 8 (c_b), disjoint
 
 
 def test_model_metrics_field_rejected_and_never_used():
@@ -186,15 +195,14 @@ def test_missing_key_fallback():
     assert out["source_label"] == "Deterministic demo fallback — NOT a Gemma response"
 
 
-def test_fallback_greedy_and_stable(monkeypatch):
-    monkeypatch.setattr(planner, 'MIN_NODE_GAIN', 1)
+def test_fallback_greedy_and_stable():
     a = planner.deterministic_plan(3, 3, sim())
     b = planner.deterministic_plan(3, 3, sim())
     assert a == b
-    # greedy: c_a (5), then c_b adds 6 (total 6), then c_c adds 7 (total 7); c_d adds nothing
-    assert a["recommended_ids"] == ["c_a", "c_b", "c_c"]
+    # c_a first (10). c_e is bigger than c_b standalone (9 vs 8) but adds only 4 after c_a, so c_b (8) is picked.
+    assert a["recommended_ids"] == ["c_a", "c_b"]
     assert planner.deterministic_plan(3, 1, sim())["recommended_ids"] == ["c_a"]
-    assert planner.deterministic_plan(3, 8, sim())["recommended_ids"] == ["c_a", "c_b", "c_c"]  # stops at zero gain
+    assert planner.deterministic_plan(3, 8, sim())["recommended_ids"] == ["c_a", "c_b"]  # stops: nothing left adds >= 5
 
 
 def test_category_zero_no_model_call():
@@ -264,7 +272,131 @@ def test_api_category_zero(monkeypatch):
 
 
 def test_fallback_skips_trivial_gains():
-    """Default threshold: sites whose marginal gain is just themselves (+1..4 nodes) are not recommended."""
-    assert planner.MIN_NODE_GAIN >= 2
-    plan = planner.deterministic_plan(3, 3, sim())
-    assert plan["recommended_ids"] == ["c_a"]
+    """Sites whose marginal gain is < MIN_NODE_GAIN (c_d: 2 nodes; c_c: 0 after c_a) are never recommended."""
+    assert planner.MIN_NODE_GAIN == 5
+    plan = planner.deterministic_plan(3, 5, sim())
+    assert set(plan["recommended_ids"]).isdisjoint({"c_c", "c_d", "c_e"})
+
+
+# ---------------------------------------------------------------- regression: sequential marginals / redundancy / zone claims
+def test_marginals_are_recomputed_after_each_pick_not_standalone():
+    steps, remaining = planner.greedy_sequence(3, 5, sim())
+    assert [x["candidate_id"] for x in steps] == ["c_a", "c_b"]
+    assert [x["marginal_nodes"] for x in steps] == [10, 8]
+    first = {m["candidate_id"]: m["marginal_nodes"] for m in remaining[0]["candidate_marginals"]}
+    after_a = {m["candidate_id"]: m["marginal_nodes"] for m in remaining[1]["candidate_marginals"]}
+    assert first["c_e"] == 9 > first["c_b"] == 8       # standalone ranking would prefer c_e
+    assert after_a["c_e"] == 4 and after_a["c_c"] == 0  # after c_a, c_e is redundant and c_c adds nothing
+    assert planner.sequential_marginals(3, ["c_a", "c_e"], sim())[1]["marginal_nodes"] == 4
+
+
+def test_evidence_has_sequential_data_and_withholds_stale_findings():
+    ev = planner.build_evidence(3, 3, sim())
+    assert [g["candidate_id"] for g in ev["greedy_sequence"]] == ["c_a", "c_b"]
+    z = ev["zone_impact_of_greedy_sequence"]
+    assert (z["zones_total"], z["zones_improved"]) == (3, 2)
+    assert {r["zone_id"] for r in z["zones"] if r["improved"]} == {"zone_a", "zone_b"}
+    ids = {f["id"] for rep in ev["agent_reports"].values() for f in rep["findings"]}
+    assert "community.zones_improved" not in ids and "medical.f1" in ids
+    assert "baseline" in ev["agent_reports_scope"] and ev["min_marginal_nodes_per_site"] == 5
+    assert "standalone_scores" not in ev
+
+
+def redundant_plan():
+    p = copy.deepcopy(GOOD)
+    p["ranked"] = [{"candidate_id": "c_a", "rank": 1, "rationale": "Largest gain."},
+                   {"candidate_id": "c_c", "rank": 2, "rationale": "Another site."}]
+    p["recommended_ids"] = ["c_a", "c_c"]
+    p["summary"] = "Activate the two best sites."
+    return p
+
+
+def test_redundant_site_rejected_with_computed_feedback_then_repaired():
+    c = mk([json.dumps(redundant_plan()), json.dumps(GOOD)])
+    out = planner.generate_plan(3, 3, client=c, sim=sim(), use_cache=False)
+    assert out["source"] == "gemma" and len(c.calls) == 2
+    assert "repair_retry_requested" in out["validation"]["repairs"]
+    assert out["plan"]["recommended_ids"] == ["c_a", "c_b"]
+    # the retry prompt carries the backend-computed reason
+    retry_prompt = c.calls[1]["contents"][0]["parts"][0]["text"]
+    assert "redundant_site" in retry_prompt and "c_c adds only 0 new reachable nodes" in retry_prompt
+
+
+def test_persistently_redundant_plan_falls_back_never_shipped():
+    c = mk(json.dumps(redundant_plan()))
+    out = planner.generate_plan(3, 3, client=c, sim=sim(), use_cache=False)
+    assert out["source"] == "deterministic_fallback" and out["fallback_reason"] == "invalid_output"
+    assert out["plan"]["recommended_ids"] == ["c_a", "c_b"]
+    assert any(r["reason"] == "redundant_site" for r in out["validation"]["rejected"])
+
+
+def test_first_site_must_also_meet_minimum():
+    p = copy.deepcopy(GOOD)
+    p["ranked"] = [{"candidate_id": "c_d", "rank": 1, "rationale": "Small site."}]
+    p["recommended_ids"] = ["c_d"]
+    p["summary"] = "Only the small site."
+    plan, rej = planner.Validator(planner.build_evidence(3, 3, sim()), sim()).validate(p)
+    assert plan is None and rej[0]["reason"] == "redundant_site" and "adds only 2" in rej[0]["detail"]
+
+
+@pytest.mark.parametrize("field,text", [
+    ("tradeoffs", ["0 of 3 provisional zones gain any-care access from the applied staging."]),   # the real Gemma error, stale baseline claim
+    ("tradeoffs", ["Only 1 of 3 zones benefit."]),
+    ("summary", "No zones gain access from these sites."),
+    ("summary", "All zones gain access from these sites."),
+    ("tradeoffs", ["Zone A does not gain any access."]),            # zone_a improves
+    ("tradeoffs", ["Zone C gains access from the plan."]),          # zone_c has no gain
+])
+def test_contradictory_zone_claims_rejected(field, text):
+    p = copy.deepcopy(GOOD)
+    p[field] = text
+    plan, rej = planner.Validator(planner.build_evidence(3, 3, sim()), sim()).validate(p)
+    assert plan is None
+    r = [x for x in rej if x["reason"] == "zone_claim_contradiction"]
+    assert r and "2 of 3 zones gain" in r[0]["detail"]   # feedback states the backend truth for the recommended set
+
+
+@pytest.mark.parametrize("field,text", [
+    ("tradeoffs", ["2 of 3 zones gain any-care access from the recommended sites."]),
+    ("tradeoffs", ["Zone C gains nothing from this plan."]),
+    ("summary", "Zone A and Zone B gain access; Zone C remains unchanged."),
+])
+def test_consistent_zone_claims_accepted(field, text):
+    p = copy.deepcopy(GOOD)
+    p[field] = text
+    plan, rej = planner.Validator(planner.build_evidence(3, 3, sim()), sim()).validate(p)
+    assert plan is not None, rej
+
+
+def test_zone_claim_tracks_the_selected_set_not_baseline():
+    """Same sentence is valid for one recommended set and contradictory for another."""
+    only_a = copy.deepcopy(GOOD)
+    only_a["ranked"] = [{"candidate_id": "c_a", "rank": 1, "rationale": "Largest gain."}]
+    only_a["recommended_ids"] = ["c_a"]
+    only_a["summary"] = "1 of 3 zones gain access from this single site."
+    ev = planner.build_evidence(3, 3, sim())
+    assert planner.Validator(ev, sim()).validate(only_a)[0] is not None
+    both = copy.deepcopy(GOOD)
+    both["summary"] = "1 of 3 zones gain access from these sites."
+    assert planner.Validator(ev, sim()).validate(both)[0] is None
+
+
+def test_contradictory_zone_claim_end_to_end_repair_and_response_is_consistent():
+    bad = copy.deepcopy(GOOD)
+    bad["tradeoffs"] = ["0 of 3 provisional zones gain any-care access from the applied staging."]
+    c = mk([json.dumps(bad), json.dumps(GOOD)])
+    out = planner.generate_plan(3, 3, client=c, sim=sim(), use_cache=False)
+    assert out["source"] == "gemma" and "repair_retry_requested" in out["validation"]["repairs"]
+    zi = {z["zone_id"]: z for z in out["verified"]["zone_impact"]}
+    assert [zi[k]["improved"] for k in ("zone_a", "zone_b", "zone_c")] == [True, True, False]
+    seq = out["verified"]["sequential_marginals"]
+    assert [s["candidate_id"] for s in seq] == ["c_a", "c_b"] and [s["marginal_nodes"] for s in seq] == [10, 8]
+    assert out["verified"]["evaluate"]["delta"]["nodes_with_any_care_route"] == seq[-1]["cumulative_nodes"] == 18
+    assert out["verified"]["min_marginal_nodes_per_site"] == 5
+
+
+def test_fallback_response_also_carries_backend_sequential_and_zone_data():
+    out = planner.generate_plan(3, 3, client=GemmaClient(api_key="", model="m"), sim=sim(), use_cache=False)
+    assert out["source"] == "deterministic_fallback"
+    assert [s["marginal_nodes"] for s in out["verified"]["sequential_marginals"]] == [10, 8]
+    assert sum(1 for z in out["verified"]["zone_impact"] if z["improved"]) == 2
