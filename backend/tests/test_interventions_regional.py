@@ -31,3 +31,15 @@ def test_regional_sampler_reproduces_existing_closures():
     assert len(m) == len(a)
     for k in range(1, 6):
         assert (m[f"cat{k}_closed_a"] == m[f"cat{k}_closed_b"]).all()
+
+
+def test_verified_ed_set_restores_cat3_access_without_changing_closures():
+    from dataclasses import replace
+
+    e = Engine.load(REG)
+    ver = replace(e, facilities=pd.read_csv(REG / "facilities_verified.csv"), _cache={})
+    assert len(ver.facilities) == 3 and ver.destinations[0] == e.destinations[0]
+    for k in (0, 1, 2, 3, 4, 5):
+        assert ver.summary(k)["directed_edges_closed"] == e.summary(k)["directed_edges_closed"]
+        assert ver.summary(k)["nodes_with_route"] >= e.summary(k)["nodes_with_route"]
+    assert e.summary(3)["nodes_with_route"] == 1 and ver.summary(3)["nodes_with_route"] > 1000

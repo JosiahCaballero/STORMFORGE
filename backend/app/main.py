@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api_alloc import router as alloc_router
 from .api_plan import router as plan_router
+from .api_regional import router as regional_router
 from .api_sim import router as sim_router
 from .api_viz import router as viz_router
 from .engine import CATS, Engine
@@ -21,6 +22,7 @@ app.include_router(sim_router)
 app.include_router(plan_router)
 app.include_router(viz_router)
 app.include_router(alloc_router)
+app.include_router(regional_router)
 
 
 @app.on_event("startup")

@@ -1,0 +1,4 @@
+name,lon,lat,nearest_node,source,position_quality,hours,snap_distance_m,facility_type
+Flagler Hospital,-81.31907268967332,29.862627416851858,5500023310,OSM way/326113100 (amenity=hospital emergency=yes opening_hours=24/7),osm_building_centroid,24/7,39.2,full_service_hospital
+HCA Florida St. Augustine Emergency,-81.3606760,29.9168815,100243181,hcafloridahealthcare.com/locations/st-augustine-emergency (1780 Woodlawn Rd; open 24 hours),address_geocode_nominatim,24/7,60.8,freestanding_er
+AdventHealth Treaty Oaks ER,-81.3607,29.8455,100204077,adventhealth.com Treaty Oaks ER (1775 State Road 207; 24/7; opened 2026-07-14),approx_street_intersection_SR207_Wildwood,24/7,130.1,freestanding_er
