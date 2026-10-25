@@ -7,6 +7,7 @@ from .api_alloc import router as alloc_router
 from .api_plan import router as plan_router
 from .api_regional import router as regional_router
 from .api_sim import router as sim_router
+from .api_sources import router as sources_router
 from .api_viz import router as viz_router
 from .engine import CATS, Engine
 
@@ -23,6 +24,7 @@ app.include_router(plan_router)
 app.include_router(viz_router)
 app.include_router(alloc_router)
 app.include_router(regional_router)
+app.include_router(sources_router)
 
 
 @app.on_event("startup")
@@ -39,14 +41,14 @@ def _warm_allocation_cache():
     threading.Thread(target=run, daemon=True).start()
 
 ATTRIBUTION = [
-    "Hazard: NOAA NHC National Storm Surge Risk Maps v4, SLOSH MOM HIGH-tide inundation (June 2026 reprocessing), Categories 1-5",
+    "Hazard: NOAA NHC National Storm Surge Risk Maps v4, SLOSH MOM HIGH-tide inundation (Updated Version 4 - 6/18/2026 per NHC), Categories 1-5",
     "Roads: © OpenStreetMap contributors (via OSMnx)",
 ]
 LIMITATIONS = [
     "NOAA layers are multi-storm planning envelopes, not forecasts or event-specific depths.",
     "NOAA NoData=255 means unknown, not confirmed dry.",
     "Closure rule is illustrative: any ~20 m sample in NOAA bin >= 3 closes a segment; OSM bridge=yes edges are exempt (deck heights unknown).",
-    "Hospital destination is provisional: OSM-tagged, emergency entrance unverified, nearest graph node ~356 m away.",
+    "Local allocation model uses one OSM hospital node (a dead end at the 4 km clip edge). Emergency-department access is computed separately on the 6 km regional network with verified 24-hour EDs (/api/v1/regional-access); entrances unverified.",
     "Counts are over graph nodes / 100-ish deterministic origins, NOT population or real-world accessibility.",
     "Not for real emergency decisions.",
 ]

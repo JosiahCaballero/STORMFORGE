@@ -42,3 +42,9 @@ backend `python -m pytest -q` 97 passed; frontend `npx vitest run` 7 passed.
 - ✅ Phase D: Lead verification + README/TASKS + commit.
 - Modeling decisions: EMS/supply coverage = within 1.5 km of road travel (assumed service radius); water rescue 500 m screening radius; helicopter <= 10 locations; provisional response base on W 9th St (in the Cat-5 core component);
   hospital node is a dead end that floods shut at Cat 3+ so it cannot be a dispatch origin. Medical support coverage stays unbounded (preserves earlier staging semantics).
+
+## Refinement pass (2026-10-25) — NOAA provenance, regional ED access in UI, debris, multi-unit UX
+- ✅ Regional ED accessibility (`backend/app/regional_access.py`, 9b50ecc) now the Impact headline (separate from full-service hospital and EMS coverage; allocation engine unchanged). `/api/v1/sources` gives NOAA revision (NHC download "Updated Version 4 - 6/18/2026", verified at nhc.noaa.gov/nationalsurge) and REAL/CALCULATED/SIMULATED classes.
+- ✅ Debris by category 12/25/45/65/85 (illustrative, seeded, mildly clustered, actual counts reported); crew capacity unchanged (2). `/api/v1/allocation/marginal` powers "next unit adds..." hints.
+- ✅ UI: tabs moved into the right panel, sticky action bar, Map Key, NOAA header chip + Data & Sources dialog, +/- multi-unit controls, "What improved / still needs help", demo + docs/DEMO.md updated.
+- Tests: backend `python -m pytest -q`; frontend `npx vitest run` (27); e2e `scripts/e2e` qa + demo at 1366x768 and 1920x1080 (`APP_URL`, `API_URL` env override ports).

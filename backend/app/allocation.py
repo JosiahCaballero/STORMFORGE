@@ -27,9 +27,12 @@ from .interventions import default_engine, default_sim
 from .zones import ZONE_DEFS, _dist_m, default_zone_model
 
 SEED = 20261024
-DEBRIS_TARGET = 10          # obstructions generated per category
-DEBRIS_ZONE_CAP = 3         # max per zone (and for unzoned) so debris is spread across regions
-DEBRIS_MIN_CRITICALITY = 5  # removal must cut >= 5 locations off from the response base ("useful connectivity")
+# Illustrative scenario parameters (NOT empirical hurricane debris rates). Actual counts can be lower when too few eligible roads exist.
+DEBRIS_TARGETS = {1: 12, 2: 25, 3: 45, 4: 65, 5: 85}
+DEBRIS_ZONE_SHARE = 0.4     # preferred max share of a category's debris in one zone; relaxed only when nothing else is eligible
+DEBRIS_CLUSTER_P = 0.5      # chance that a pick is drawn from segments within DEBRIS_CLUSTER_M of an earlier pick
+DEBRIS_CLUSTER_M = 350.0
+DEBRIS_MIN_CRITICALITY = 1  # blocking the segment must cut >= 1 location off from the response base (a relevant connector)
 CREW_CAPACITY = 2           # obstructions per clearing crew
 WATER_RADIUS_M = 500.0
 HELI_MAX_NODES = 10
@@ -206,16 +209,32 @@ class AllocationModel:
                 pool.append((key, crit))
         rng = random.Random(f"stormforge-debris-{SEED}-{cat}")
         rng.shuffle(pool)
+        target = DEBRIS_TARGETS[cat]
+        cap = max(1, math.ceil(target * DEBRIS_ZONE_SHARE))
         per_zone: dict = defaultdict(int)
-        chosen = []
-        for key, crit in pool:
-            z = self.node_zone.get(key[0])
-            if per_zone[z] >= DEBRIS_ZONE_CAP:
-                continue
-            per_zone[z] += 1
+        chosen: list = []
+
+        def mid(key):
+            (la1, lo1), (la2, lo2) = self.coords[key[0]], self.coords[key[1]]
+            return (la1 + la2) / 2, (lo1 + lo2) / 2
+
+        def near(key):
+            la, lo = mid(key)
+            return any(_dist_m(la, lo, *mid(c[0])) <= DEBRIS_CLUSTER_M for c in chosen)
+
+        remaining = [(k, c) for k, c in pool]
+        while remaining and len(chosen) < target:
+            ok = [i for i, (k, _) in enumerate(remaining) if per_zone[self.node_zone.get(k[0])] < cap]
+            if not ok:  # zone share is a preference for spread; if nothing else is eligible, allow it so targets are still met
+                ok = list(range(len(remaining)))
+            pick = ok[0]
+            if chosen and rng.random() < DEBRIS_CLUSTER_P:
+                close = [i for i in ok if near(remaining[i][0])]
+                if close:
+                    pick = rng.choice(close)
+            key, crit = remaining.pop(pick)
+            per_zone[self.node_zone.get(key[0])] += 1
             chosen.append((key, crit))
-            if len(chosen) >= DEBRIS_TARGET:
-                break
         chosen.sort(key=lambda t: t[0])
         out = []
         for i, (key, crit) in enumerate(chosen, 1):
@@ -230,10 +249,10 @@ class AllocationModel:
         return out
 
     def debris_meta(self, cat: int) -> dict:
-        return {"seed": SEED, "per_category_seed": f"stormforge-debris-{SEED}-{cat}", "target_count": DEBRIS_TARGET,
-                "per_zone_cap": DEBRIS_ZONE_CAP, "min_cut_off_locations": DEBRIS_MIN_CRITICALITY,
-                "rule": "Seeded sample of passable, non-bridge road segments whose blockage would cut >= 5 locations off from the response base. "
-                        "Hypothetical; independent of NOAA flooding.", "provenance": "hypothetical"}
+        return {"seed": SEED, "per_category_seed": f"stormforge-debris-{SEED}-{cat}", "target_count": DEBRIS_TARGETS.get(cat), "actual_count": len(self.debris(cat)),
+                "per_zone_cap": max(1, math.ceil((DEBRIS_TARGETS.get(cat) or 0) * DEBRIS_ZONE_SHARE)), "clustering": f"{int(DEBRIS_CLUSTER_P*100)}% of picks within {DEBRIS_CLUSTER_M:.0f} m of an earlier pick", "min_cut_off_locations": DEBRIS_MIN_CRITICALITY,
+                "rule": "Seeded, mildly clustered sample of passable, non-bridge road segments whose blockage would cut >= 1 location off from the response base. "
+                        "Target counts per category are illustrative scenario parameters, not empirical debris rates. Hypothetical; independent of NOAA flooding.", "provenance": "hypothetical"}
 
     def _block(self, g: nx.DiGraph, o: Obstruction) -> None:
         g.remove_edges_from([(u, v) for u, v, _ in o.open_edges if g.has_edge(u, v)])

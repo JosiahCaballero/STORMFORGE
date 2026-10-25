@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, ApiError, type ActionHint, type AllocationResult, type Assignment, type Compared, type GemmaPlan, type PlacedAssignment, type ResourceId, type Setup, type ZoneGeo } from './lib/api'
+import { api, ApiError, type ActionHint, type AllocationResult, type Assignment, type Compared, type GemmaPlan, type Marginal, type PlacedAssignment, type RegionalBundle, type ResourceId, type Setup, type Sources, type ZoneGeo } from './lib/api'
 import { layersFor, moveTo, pctCutOff, pickDemoZone, removeAt, RES, sameAllocation, type LayerKey } from './lib/alloc'
 import { CATS, edgeGeometry, edgesInfo, type Cat, type EdgeGeo, type Facility, type RoadCollection } from './lib/data'
 import MapView, { type FlyApi } from './components/MapView'
 import { ImpactTab, DeployTab } from './components/ImpactDeploy'
 import { CompareTab } from './components/CompareTab'
 import { DemoCoach, Welcome } from './components/DemoCoach'
-import { HowItWorks } from './components/HowItWorks'
-import { LayerControl } from './components/LayerControl'
+import { HowItWorks, NoaaChip } from './components/HowItWorks'
+import { MapKey } from './components/MapKey'
 
 type Tab = 'impact' | 'deploy' | 'compare'
 const TABS: { id: Tab; label: string }[] = [{ id: 'impact', label: 'Impact' }, { id: 'deploy', label: 'Deploy' }, { id: 'compare', label: 'Compare' }]
@@ -49,6 +49,10 @@ export default function App() {
   const [roads, setRoads] = useState<RoadCollection | null>(null)
   const [geo, setGeo] = useState<EdgeGeo | null>(null)
   const [facility, setFacility] = useState<Facility | null>(null)
+  const [regional, setRegional] = useState<RegionalBundle | null>(null)
+  const [regionalErr, setRegionalErr] = useState(false)
+  const [sources, setSources] = useState<Sources | null>(null)
+  const [marginal, setMarginal] = useState<Marginal | null>(null)
   const [welcome, setWelcome] = useState(() => { try { return localStorage.getItem(STORED) !== '1' } catch { return true } })
   const [demo, setDemo] = useState(false)
   const [step, setStep] = useState(1)
@@ -68,6 +72,7 @@ export default function App() {
     fetch('/data/roads.geojson').then((r) => r.json()).then((fc: RoadCollection) => { setRoads(fc); setGeo(edgeGeometry(fc)) }).catch((e) => setLoadErr(String(e)))
     fetch('/data/facilities.json').then((r) => r.json()).then((f: Facility[]) => setFacility(f[0] ?? null)).catch(() => {})
     api.zoneGeo().then(setZonesGeo).catch(() => setZonesGeo(null))
+    api.sources().then(setSources).catch(() => setSources(null))
   }, [])
 
   useEffect(() => {
@@ -85,6 +90,8 @@ export default function App() {
     R.current.cat = c; R.current.assign = []; R.current.backup = null; R.current.setup = null; R.current.hints = null; R.current.plan = null
     setCat(c); setLoading(true); setLoadErr(null)
     setAssign([]); setBackup(null); setPlan(null); setPlanErr(null); setCmp(null); setResult(null); setSetup(null); setHints(null)
+    setRegional(null); setRegionalErr(false); setMarginal(null)
+    api.regional(c).then((b) => { if (my === epoch.current) setRegional(b) }).catch(() => { if (my === epoch.current) setRegionalErr(true) })
     setLayers(new Set(DEFAULT_LAYERS))
     try {
       const [s, h, r] = await Promise.all([api.setup(c), api.actions(c), api.evaluate(c, [])])
@@ -98,6 +105,14 @@ export default function App() {
     }
   }, [])
   useEffect(() => { void loadCategory(3) }, [loadCategory])
+
+  const assignKey = JSON.stringify(assign.map((a) => [a.resource, a.zone_id]))
+  useEffect(() => {
+    if (tab !== 'deploy' || !zoneSel || loading) return
+    let dead = false
+    api.marginal(cat, zoneSel, R.current.assign).then((m) => !dead && setMarginal(m)).catch(() => !dead && setMarginal(null))
+    return () => { dead = true }
+  }, [tab, zoneSel, cat, assignKey, loading])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -308,7 +323,7 @@ export default function App() {
   return (
     <div className="relative h-full w-full overflow-hidden">
       <MapView
-        cat={cat} layers={layers} facility={facility} geo={geo} zones={zonesGeo} zonePct={zonePct} zoneSel={zoneSel} onZone={selectZone}
+        cat={cat} layers={layers} facility={facility} eds={regional?.access.facilities ?? null} geo={geo} zones={zonesGeo} zonePct={zonePct} zoneSel={zoneSel} onZone={selectZone}
         result={result} base={setup?.base ?? null} flyRef={fly} onBasemap={setBasemap} panelPad={panelOpen ? PANEL_W + 12 : 0}
       />
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at center, transparent 60%, rgba(6,10,19,.65) 100%)' }} />
@@ -318,12 +333,8 @@ export default function App() {
           <div className="text-[16px] font-bold tracking-[.22em]">STORM<span style={{ color: 'var(--cyan)' }}>FORGE</span></div>
           <div className="hidden text-[10px] xl:block" style={{ color: 'var(--mute)' }}>Where should limited rescue resources go?</div>
         </div>
-        <nav className="mx-auto flex gap-1" role="tablist" aria-label="Main">
-          {TABS.map((t) => (
-            <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className="rounded-lg px-5 py-1.5 text-[13px] font-semibold transition-colors"
-              style={{ background: tab === t.id ? 'rgba(34,211,238,.16)' : 'transparent', color: tab === t.id ? 'var(--cyan)' : 'var(--mute)', boxShadow: tab === t.id ? 'inset 0 -2px 0 var(--cyan)' : 'none' }}>{t.label}</button>
-          ))}
-        </nav>
+        <NoaaChip sources={sources} onOpen={() => setHowOpen(true)} />
+        <div className="mx-auto" />
         <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Hurricane category">
           <span className="label mr-1 hidden lg:inline">Hurricane</span>
           {CATS.slice(1).map((c) => (
@@ -333,10 +344,10 @@ export default function App() {
           ))}
         </div>
         <button onClick={() => void runStep(1)} className="rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap text-white" style={{ background: 'linear-gradient(90deg,#0e7490,#6d28d9)' }}>▶ Guided demo</button>
-        <button onClick={() => setHowOpen(true)} className="rounded-lg border border-[var(--line)] px-2.5 py-1.5 text-xs whitespace-nowrap hover:bg-white/5" aria-label="How it works">ⓘ How it works</button>
+        <button onClick={() => setHowOpen(true)} className="rounded-lg border border-[var(--line)] px-2.5 py-1.5 text-xs whitespace-nowrap hover:bg-white/5" aria-label="Data and sources, how it works">ⓘ Data &amp; Sources</button>
       </header>
 
-      <LayerControl on={layers} onToggle={toggleLayer} available={available} />
+      <MapKey on={layers} onToggle={toggleLayer} available={available} bottomReserve={demo ? 250 : 0} />
 
       {toast && (
         <div key={toast.id} role="status" aria-live="polite" className="panel toast-in absolute top-[64px] z-30 flex max-w-[460px] items-start gap-2.5 px-4 py-2.5 text-[13px] leading-snug"
@@ -352,34 +363,77 @@ export default function App() {
 
       {panelOpen && (
         <aside className="panel absolute top-[64px] right-3 bottom-10 z-10 flex flex-col overflow-hidden" style={{ width: PANEL_W }} aria-label={`${tab} panel`}>
-          <div className="flex items-center justify-between border-b px-3.5 py-2" style={{ borderColor: 'var(--line)' }}>
-            <div className="text-[14px] font-semibold">Category {cat} hurricane</div>
+          <nav className="flex border-b" style={{ borderColor: 'var(--line)' }} role="tablist" aria-label="Main">
+            {TABS.map((t) => (
+              <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className="h-11 flex-1 text-[14px] font-semibold transition-colors hover:bg-white/5"
+                style={{ background: tab === t.id ? 'rgba(34,211,238,.14)' : 'transparent', color: tab === t.id ? 'var(--cyan)' : 'var(--mute)', boxShadow: tab === t.id ? 'inset 0 -3px 0 var(--cyan)' : 'none' }}>{t.label}</button>
+            ))}
+          </nav>
+          <div className="flex items-center justify-between border-b px-3.5 py-1.5" style={{ borderColor: 'var(--line)' }}>
+            <div className="text-[13px] font-semibold">Category {cat} hurricane</div>
             <div className="mono text-[11px]" style={{ color: 'var(--mute)' }} aria-label="Units used">{result ? `${result.units_used}/${result.units_total} units sent` : ''}</div>
           </div>
-          <div className="flex-1 overflow-y-auto px-3.5 py-3">
+          <div className="flex-1 overflow-y-auto px-3.5 py-3" role="tabpanel">
             {loadErr && !loading ? <div className="text-xs" style={{ color: 'var(--coral)' }}>{loadErr}</div> : null}
-            {tab === 'impact' && <ImpactTab setup={setup} result={result} zoneSel={zoneSel} onSelect={selectZone} onDeploy={() => setTab('deploy')} loading={loading} err={null} />}
-            {tab === 'deploy' && <DeployTab setup={setup} result={result} hints={hints} assign={assign} zoneSel={zoneSel} onSelect={selectZone} onDeploy={(r) => void deploy(r)} onRemove={(i) => void remove(i)} onMove={(i, z) => void move(i, z)} busy={busy} onReset={() => void reset()} gemmaApplied={gemmaApplied} onRestore={() => void restoreMine()} />}
+            {tab === 'impact' && <ImpactTab setup={setup} result={result} zoneSel={zoneSel} onSelect={selectZone} loading={loading} err={null} regional={regional} regionalErr={regionalErr} cat={cat} />}
+            {tab === 'deploy' && <DeployTab setup={setup} result={result} hints={hints} assign={assign} zoneSel={zoneSel} onSelect={selectZone} onDeploy={(r) => void deploy(r)} onRemove={(i) => void remove(i)} onMove={(i, z) => void move(i, z)} busy={busy} onReset={() => void reset()} gemmaApplied={gemmaApplied} onRestore={() => void restoreMine()} marginal={marginal} regional={regional} />}
             {tab === 'compare' && (
               <CompareTab setup={setup} mineRes={mineRes} gemmaRes={gemmaRes} cmp={cmp} plan={plan} planBusy={planBusy} planErr={planErr}
                 onGenerate={() => void generate()} onApply={applyGemma} onRestore={() => void restoreMine()} onReset={() => void reset()}
                 hasBackup={backup !== null} gemmaApplied={gemmaApplied} noneAssigned={mine.length === 0} mineLoading={!!backup && !cmp} />
             )}
           </div>
+          <ActionBar tab={tab} zone={setup?.zones.find((z) => z.zone_id === zoneSel) ?? null} unitsUsed={result?.units_used ?? 0} plan={plan} planBusy={planBusy} gemmaApplied={gemmaApplied} hasBackup={backup !== null} loading={loading}
+            onDeploy={() => setTab('deploy')} onReview={() => setTab('compare')} onGenerate={() => void generate()} onApply={applyGemma} onRestore={() => void restoreMine()} />
         </aside>
       )}
 
       <footer className="absolute bottom-2 left-3 z-10 flex items-center gap-3 text-[10px]" style={{ color: 'var(--mute)' }}>
         <span className="rounded border px-2 py-0.5 tracking-wider uppercase" style={{ borderColor: 'var(--amber)', color: 'var(--amber)', background: 'rgba(6,10,19,.7)' }}>Educational simulator · not for real emergency decisions</span>
-        <span className="hidden xl:inline">NOAA SLOSH surge maps · © OpenStreetMap{basemap === false ? ' · basemap offline' : ' · © CARTO'} · resources, debris and base are hypothetical</span>
+        <span className="hidden xl:inline">NOAA SLOSH MOM v4 (updated 6/18/2026) · © OpenStreetMap{basemap === false ? ' · basemap offline' : ' · © CARTO'} · resources, debris and base are hypothetical</span>
       </footer>
 
-      {howOpen && <HowItWorks onClose={() => setHowOpen(false)} setup={setup} roads={roads} cat={cat} />}
+      {howOpen && <HowItWorks onClose={() => setHowOpen(false)} setup={setup} roads={roads} cat={cat} sources={sources} regional={regional} />}
       {demo && (
         <DemoCoach step={step} onBack={() => void runStep(Math.max(1, step - 1))} onNext={() => void runStep(Math.min(5, step + 1))} onExit={() => setDemo(false)}
-          ctx={{ cat, setup, result, zone: setup?.zones.find((z) => z.zone_id === demoZone) ?? null, plan, planBusy, planErr, cmp, busy: demoBusy, err: demoErr }} />
+          ctx={{ cat, setup, result, zone: setup?.zones.find((z) => z.zone_id === demoZone) ?? null, plan, planBusy, planErr, cmp, busy: demoBusy, err: demoErr, regional, sources }} />
       )}
-      {welcome && <Welcome onStart={startDemo} onSkip={dismissWelcome} />}
+      {welcome && <Welcome onStart={startDemo} onSkip={dismissWelcome} sources={sources} />}
+    </div>
+  )
+}
+
+/** Sticky next-step button at the bottom of the right panel (never scrolls away). */
+function ActionBar({ tab, zone, unitsUsed, plan, planBusy, gemmaApplied, hasBackup, loading, onDeploy, onReview, onGenerate, onApply, onRestore }: {
+  tab: Tab; zone: { name: string } | null; unitsUsed: number; plan: GemmaPlan | null; planBusy: boolean; gemmaApplied: boolean; hasBackup: boolean; loading: boolean
+  onDeploy: () => void; onReview: () => void; onGenerate: () => void; onApply: () => void; onRestore: () => void
+}) {
+  let label = '', note = '', disabled = false, onClick = onDeploy
+  if (tab === 'impact') {
+    onClick = onDeploy; disabled = !zone || loading
+    label = zone ? `Deploy Resources to ${zone.name} →` : 'Deploy Resources →'
+    note = zone ? '' : 'Select a neighborhood on the map or from the list first.'
+  } else if (tab === 'deploy') {
+    onClick = onReview; disabled = loading
+    label = 'Review My Response →'
+    note = unitsUsed ? `${unitsUsed} unit${unitsUsed === 1 ? '' : 's'} sent. Compare your response with an AI recommendation.` : 'No units sent yet. You can still compare with an AI recommendation.'
+  } else if (!plan) {
+    onClick = onGenerate; disabled = planBusy || loading
+    label = planBusy ? 'Asking Gemma…' : 'Get AI Recommendation'
+    note = planBusy ? 'This usually takes 15–30 seconds. Please keep this tab open.' : 'Gemma suggests where to send the 11 units; the backend verifies every number.'
+  } else if (!gemmaApplied) {
+    onClick = onApply; disabled = planBusy
+    label = 'Apply Gemma Plan to the Map'
+    note = 'You can restore your own plan afterwards.'
+  } else {
+    onClick = onRestore; disabled = !hasBackup
+    label = 'Restore My Plan'
+    note = 'Gemma’s plan is on the map.'
+  }
+  return (
+    <div className="border-t px-3.5 pt-2 pb-3" style={{ borderColor: 'var(--line)', background: 'linear-gradient(180deg, rgba(11,17,32,.6), #0b1120)' }} data-testid="action-bar">
+      {note && <div className="mb-1.5 text-[11px] leading-snug" style={{ color: 'var(--mute)' }}>{note}</div>}
+      <button onClick={onClick} disabled={disabled} className="w-full rounded-lg px-3 py-3 text-[14px] font-bold text-white transition-[filter] enabled:hover:brightness-110 disabled:opacity-40" style={{ background: 'linear-gradient(90deg,#0e7490,#6d28d9)', boxShadow: disabled ? 'none' : '0 0 20px rgba(109,40,217,.35)' }}>{label}</button>
     </div>
   )
 }

@@ -25,7 +25,6 @@ export const RESOURCES: { id: ResourceId; action: string; short: string; icon: s
 export const RES = Object.fromEntries(RESOURCES.map((r) => [r.id, r])) as Record<ResourceId, (typeof RESOURCES)[number]>
 
 export const COVERAGE_ROWS: { key: keyof Metrics; label: string; zoneKey: keyof ZoneMetrics }[] = [
-  { key: 'hospital_locations', label: 'Can reach a hospital', zoneKey: 'hospital_locations' },
   { key: 'ems_locations', label: 'EMS coverage', zoneKey: 'ems_locations' },
   { key: 'supply_locations', label: 'Supply access', zoneKey: 'supply_locations' },
   { key: 'water_rescue_locations', label: 'Potential water rescue', zoneKey: 'water_rescue_locations' },
@@ -83,7 +82,7 @@ export function problemLines(z: SetupZone): { key: string; text: string; tone: '
 
 export interface BeforeAfterRow { key: string; label: string; before: number; after: number; better: 'down' | 'up' }
 
-/** At most 4 rows for one region: cut-off + debris always, then up to two coverage metrics that changed (else hospital). */
+/** At most 4 rows for one region: cut-off + debris always, then up to two coverage metrics that changed (else EMS). */
 export function regionBeforeAfter(z: ResultZone): BeforeAfterRow[] {
   const rows: BeforeAfterRow[] = [
     { key: 'cut', label: 'Locations cut off from help', before: z.before.cut_off_locations, after: z.after.cut_off_locations, better: 'down' },
@@ -162,4 +161,34 @@ export function pickDemoZone(setup: { attention_order: string[] }, hints: Action
   const ok = (id: string) => hints.some((h) => h.resource === 'debris_crew' && h.zone_id === id && h.valid)
   if (ok('west_augustine')) return 'west_augustine'
   return setup.attention_order.find(ok) ?? null
+}
+
+/** "What improved?" lines for one region, from backend before/after deltas only. */
+export function improvedLines(z: ResultZone): string[] {
+  const d = z.delta
+  const out: string[] = []
+  if (d.cut_off_locations < 0) out.push(`${fmt(-d.cut_off_locations)} fewer locations cut off from the response base`)
+  if (d.debris_blocked < 0) out.push(`${fmt(-d.debris_blocked)} road${d.debris_blocked === -1 ? '' : 's'} cleared of simulated debris`)
+  for (const c of COVERAGE_ROWS) if (d[c.zoneKey] > 0) out.push(`+${fmt(d[c.zoneKey])} locations: ${c.label}`)
+  return out
+}
+
+/** "What still needs help?" lines. Hospital kind from the 4 km model is dropped; emergency-department access comes from the regional calculation. */
+export function stillNeedsLines(z: ResultZone, ed: { nodes: number; nodes_with_24h_ed_route: number } | undefined): string[] {
+  const out = z.remaining.filter((r) => r.kind !== 'hospital').map((r) => r.text)
+  if (ed && ed.nodes > ed.nodes_with_24h_ed_route) out.push(`${fmt(ed.nodes - ed.nodes_with_24h_ed_route)} of ${fmt(ed.nodes)} locations cannot reach a verified 24-hour emergency department (regional calculation; deployments do not change this)`)
+  return out
+}
+
+/** Assignments of one resource in one region, as result-request indexes (last one first, for the "−" button). */
+export function indexesIn(list: Assignment[], resource: ResourceId, zoneId: string | null): number[] {
+  const out: number[] = []
+  list.forEach((a, i) => { if (a.resource === resource && a.zone_id === zoneId) out.unshift(i) })
+  return out
+}
+
+/** Short name of the road(s) a crew cleared, from the result's debris list. */
+export function clearedRoads(res: AllocationResult, ids: string[]): { id: string; name: string; reopened: number; flooded: boolean }[] {
+  return ids.map((id) => res.roads.debris.find((o) => o.id === id)).filter((o): o is NonNullable<typeof o> => !!o)
+    .map((o) => ({ id: o.id, name: o.name, reopened: o.cut_off_locations_if_blocked, flooded: o.reason !== 'debris' }))
 }

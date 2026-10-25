@@ -39,10 +39,10 @@ export async function launch({ stubPlan = process.env.LIVE_PLAN !== '1' } = {}) 
   const waitFor = (fn, arg, ms = 30000) => p.waitForFunction(fn, { timeout: ms }, arg).then(() => true).catch(() => false)
   const api = (url, body) => p.evaluate(async (url, body) => (await fetch(url, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {})).json(), url, body)
   const open = async (explore = true) => {
-    await p.goto('http://localhost:5173/?shot', { waitUntil: 'networkidle2' })
+    await p.goto((process.env.APP_URL ?? 'http://localhost:5173') + '/?shot', { waitUntil: 'networkidle2' })
     await waitFor(() => !!document.querySelector('[aria-label=Welcome]') || document.querySelector('aside'), null, 20000)
     if (explore) { await click('button', /Explore on my own/, 500) }
-    await waitFor(() => /Neighborhoods needing attention/.test(document.querySelector('aside')?.innerText ?? ''), null, 40000)
+    await waitFor(() => /Response zones needing attention/.test(document.querySelector('aside')?.innerText ?? ''), null, 40000)
     await sleep(2500)
   }
   const done = async () => { console.log('\n== PROBLEMS (' + problems.length + ')'); problems.forEach((x) => console.log(' -', x)); await b.close(); process.exitCode = problems.length ? 1 : 0 }

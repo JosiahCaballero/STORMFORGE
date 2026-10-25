@@ -26,6 +26,6 @@ cd frontend && npx tsc -b && npx vitest run && npx vite build
 ```
 
 ## Honesty notes
-NOAA layers are planning envelopes, not forecasts (NoData = unknown). Closures use an illustrative rule. Debris, inventory, the response base and staging sites are **hypothetical**;
+NOAA layers (SLOSH MOM v4, NHC download "Updated Version 4 - 6/18/2026") are planning envelopes, not forecasts (NoData = unknown). Debris counts (12/25/45/65/85 by category) are illustrative scenario parameters. Closures use an illustrative rule. Debris, inventory, the response base and staging sites are **hypothetical**;
 a "location" is a road-network node, not a person. EMS/supply coverage uses an assumed 1.5 km service radius; water rescue is a 500 m screening radius; the helicopter targets at most 10 locations
-(no flight/landing claims). The only OSM hospital is a dead end that floods shut at Cat 3+. See `docs/CONTRACT_V2.md`, `docs/GEMMA.md`, `docs/MEDICAL_ACCESS.md`, `docs/DEMO.md`.
+(no flight/landing claims). Emergency-department access is a separate regional calculation (6 km network, verified 24-hour EDs); the allocation model's own single OSM hospital node is not used as the access headline. See `docs/CONTRACT_V2.md`, `docs/GEMMA.md`, `docs/MEDICAL_ACCESS.md`, `docs/DEMO.md`.

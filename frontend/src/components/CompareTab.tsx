@@ -1,6 +1,6 @@
 import type { AllocationResult, Compared, GemmaPlan, Setup } from '../lib/api'
 import { COVERAGE_ROWS, diffRows, fmt, RES, stillCutOff, ZONE_SHORT } from '../lib/alloc'
-import { Hint, Section, primaryBg, primaryBtn } from './ui'
+import { Hint, Section } from './ui'
 
 function Cell({ v, best, na }: { v: number | string | null; best: boolean; na?: boolean }) {
   return <td className="mono py-1 text-right text-[13px]" style={{ color: na ? 'var(--mute)' : best ? '#4ade80' : 'var(--ink)', fontWeight: best ? 700 : 400 }}>{na || v === null ? '—' : typeof v === 'number' ? fmt(v) : v}</td>
@@ -24,17 +24,13 @@ export function CompareTab({ setup, mineRes, gemmaRes, cmp, plan, planBusy, plan
 
   return (
     <div className="flex flex-col gap-3">
-      <Hint n={3}>Ask Gemma for a different allocation of the same 11 units, then <b>compare</b> it with yours.</Hint>
+      <Hint n={3}>Get an AI recommendation for the same 11 units, then <b>compare</b> it with your own response.</Hint>
 
-      <div className="flex gap-2">
-        <button onClick={onGenerate} disabled={planBusy} className={`${primaryBtn} flex-1`} style={primaryBg}>
-          {planBusy ? 'Asking Gemma…' : plan ? 'Regenerate Gemma Plan' : 'Generate Gemma Plan'}
-        </button>
-        <button onClick={onApply} disabled={!plan || planBusy || gemmaApplied} className="rounded-lg border px-3 py-2 text-[13px] font-semibold hover:bg-white/5 disabled:opacity-35" style={{ borderColor: 'var(--cyan)', color: 'var(--cyan)' }}>Apply Gemma Plan</button>
-      </div>
-      <div className="flex gap-2 text-[11px]">
-        <button onClick={onRestore} disabled={!hasBackup} className="rounded border px-2.5 py-1 hover:bg-white/5 disabled:opacity-35" style={{ borderColor: 'var(--line)' }}>Restore My Plan</button>
-        <button onClick={onReset} className="rounded border px-2.5 py-1 hover:bg-white/5" style={{ borderColor: 'var(--line)' }}>Reset Allocation</button>
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        <button onClick={onApply} disabled={!plan || planBusy || gemmaApplied} className="rounded-lg border px-3 py-1.5 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-35" style={{ borderColor: 'var(--cyan)', color: 'var(--cyan)' }}>Apply Gemma Plan</button>
+        <button onClick={onRestore} disabled={!hasBackup} className="rounded border px-2.5 py-1.5 hover:bg-white/5 disabled:opacity-35" style={{ borderColor: 'var(--line)' }}>Restore My Plan</button>
+        <button onClick={onReset} className="rounded border px-2.5 py-1.5 hover:bg-white/5" style={{ borderColor: 'var(--line)' }}>Reset Allocation</button>
+        {plan && <button onClick={onGenerate} disabled={planBusy} className="rounded border px-2.5 py-1.5 hover:bg-white/5 disabled:opacity-35" style={{ borderColor: 'var(--line)' }}>Regenerate</button>}
         {gemmaApplied && <span className="ml-auto self-center" style={{ color: 'var(--cyan)' }}>Gemma’s plan is applied on the map</span>}
       </div>
 
@@ -75,7 +71,7 @@ export function CompareTab({ setup, mineRes, gemmaRes, cmp, plan, planBusy, plan
         </tbody>
       </table>
       {noneAssigned && !hasBackup && !plan && <div className="text-[11px]" style={{ color: 'var(--mute)' }}>You have not sent any resources yet. Go to Deploy first, or ask Gemma and compare with an empty plan.</div>}
-      <div className="text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>Each line counts a different kind of coverage in road-network locations, so they are never added together. Green = better.</div>
+      <div className="text-[10px] leading-snug" style={{ color: 'var(--mute)' }}>Each line counts a different kind of simulated coverage in road-network locations, so they are never added together. Green = better. Emergency-department access is a separate regional calculation and does not change with either plan.</div>
 
       {plan && (
         <>
@@ -97,7 +93,7 @@ export function CompareTab({ setup, mineRes, gemmaRes, cmp, plan, planBusy, plan
           </Section>
         </>
       )}
-      <Section title="Which neighborhoods still lack coverage">
+      <Section title="What still needs help? Zones still cut off">
         <div className="grid grid-cols-2 gap-3">
           {([['My Response', gap(m)], ['Gemma', plan ? gap(g) : null]] as const).map(([t, list]) => (
             <div key={t}>
@@ -108,9 +104,12 @@ export function CompareTab({ setup, mineRes, gemmaRes, cmp, plan, planBusy, plan
             </div>
           ))}
         </div>
-        <details className="mt-2"><summary className="cursor-pointer" style={{ color: 'var(--mute)' }}>All remaining gaps (my response)</summary>
-          <ul className="mt-1">{m?.zones.map((z) => <li key={z.zone_id} className="mt-1"><b>{z.name}</b><ul style={{ color: 'var(--mute)' }}>{z.remaining.map((r) => <li key={r.kind}>{r.text}</li>)}</ul></li>)}</ul>
-        </details>
+        {([['My Response', m], ['Gemma', plan ? g : null]] as const).map(([t, r]) => r && (
+          <details key={t} className="mt-2"><summary className="cursor-pointer" style={{ color: 'var(--mute)' }}>All remaining gaps ({t})</summary>
+            <ul className="mt-1">{r.zones.map((z) => { const left = z.remaining.filter((x) => x.kind !== 'hospital'); return left.length ? <li key={z.zone_id} className="mt-1"><b>{z.name}</b><ul style={{ color: 'var(--mute)' }}>{left.map((x) => <li key={x.kind}>{x.text}</li>)}</ul></li> : null })}</ul>
+          </details>
+        ))}
+        <p className="mt-2 text-[10.5px] leading-snug" style={{ color: 'var(--mute)' }}>Emergency-department access is reported separately on the Impact tab (regional calculation); neither plan changes it.</p>
       </Section>
     </div>
   )

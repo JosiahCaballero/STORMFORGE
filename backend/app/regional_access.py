@@ -89,7 +89,7 @@ def summary(cat: int) -> dict:
     ln, lo = [n for n in local.node_ids if n not in dest], [o for o in local.origins if o not in dest]
     rn, ro = [n for n in reg.node_ids if n not in dest], [o for o in reg.origins if o not in dest]
     facs = [{"name": r.name, "facility_type": r.facility_type, "position_quality": r.position_quality,
-             "snap_distance_m": float(r.snap_distance_m), "source": r.source,
+             "snap_distance_m": float(r.snap_distance_m), "source": r.source, "lon": float(r.lon), "lat": float(r.lat),
              "accessible": len(per[r.name]) > 0, "nodes_that_reach_it": len(per[r.name])} for r in fac.itertuples(index=False)]
     return {"category": cat, "provenance": "simulated", "provisional": True, "model": "regional_6km_access",
             "any_24h_ed": {"local_4km_nodes": _count(ln, lo, er), "regional_nodes": _count(rn, ro, er)},

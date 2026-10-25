@@ -42,3 +42,19 @@ export const Spinner = ({ label }: { label: string }) => (
 
 export const primaryBtn = 'rounded-lg px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-40'
 export const primaryBg = { background: 'linear-gradient(90deg,#0e7490,#6d28d9)' }
+
+export type Kind = 'real' | 'calculated' | 'simulated'
+export const KIND: Record<Kind, { label: string; color: string; tip: string }> = {
+  real: { label: 'REAL DATA', color: '#4ade80', tip: 'Published or mapped by others (NOAA, OpenStreetMap, operator-listed facilities).' },
+  calculated: { label: 'CALCULATED', color: '#22d3ee', tip: 'Computed by STORMFORGE from real data using the stated, illustrative rules.' },
+  simulated: { label: 'SIMULATED', color: '#fbbf24', tip: 'Hypothetical input made up for this demo; not measured by NOAA or anyone else.' },
+}
+
+/** Small REAL / CALCULATED / SIMULATED tag for a metric or section. */
+export function SourceBadge({ kind, className = '' }: { kind: Kind; className?: string }) {
+  const k = KIND[kind]
+  return (
+    <span title={k.tip} className={`mono inline-block rounded border px-1 py-px text-[8.5px] leading-none font-semibold tracking-wider whitespace-nowrap ${className}`}
+      style={{ color: k.color, borderColor: `${k.color}66`, background: `${k.color}14` }}>{k.label}</span>
+  )
+}

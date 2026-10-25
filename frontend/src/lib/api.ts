@@ -194,6 +194,35 @@ export interface ZoneGeo {
   boundary: { type: 'Polygon'; coordinates: number[][][] } | null
 }
 
+/** Regional emergency-care access (separate from allocation): GET /api/v1/regional-access, /regional-access/zones. */
+export interface AccessCount { nodes: number; nodes_with_route: number; origins: number; origins_with_route: number }
+export interface AccessBasis { local_4km_nodes: AccessCount; regional_nodes: AccessCount }
+export interface EdFacility {
+  name: string; facility_type: 'full_service_hospital' | 'freestanding_er'; position_quality: string; snap_distance_m: number
+  source: string; lon: number; lat: number; accessible: boolean; nodes_that_reach_it: number
+}
+export interface RegionalAccess {
+  category: number
+  any_24h_ed: AccessBasis
+  full_service_hospital: AccessBasis
+  facilities: EdFacility[]
+  scope: string[]
+  mapping_valid: boolean
+}
+export interface RegionalZone { zone: string; category: number; basis: string; nodes: number; nodes_with_24h_ed_route: number; nodes_with_full_service_hospital_route: number }
+export interface RegionalBundle { access: RegionalAccess; zones: RegionalZone[]; mapping: { valid: boolean; local_nodes: number; regional_nodes: number; local_edges_matched: number } }
+
+export interface SourceClass { id: 'real' | 'calculated' | 'simulated'; label: string; color: string; text: string; items: string[] }
+export interface Sources {
+  noaa: { name: string; headline: string; short: string; revision_date: string; revision_basis: string; local_processing: string; url: string; interpretation: string }
+  classes: SourceClass[]
+  plain_english: string[]
+  separate_calculations: string
+}
+
+export interface MarginalRow { resource: ResourceId; remaining: number; valid: boolean; useful: boolean; new_locations: number; reason: RejectReason | null; message: string }
+export interface Marginal { category: number; zone_id: string; min_gain: number; resources: MarginalRow[] }
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, msg: string) { super(msg); this.status = status }
@@ -216,6 +245,16 @@ export const api = {
     post('/api/v1/allocation/evaluate', { category, assignments: clean(assignments) }).then(j<AllocationResult>),
   compare: (category: number, plans: { label: string; assignments: Assignment[] }[]) =>
     post('/api/v1/allocation/compare', { category, plans: plans.map((p) => ({ label: p.label, assignments: clean(p.assignments) })) }).then(j<Compared>),
+  marginal: (category: number, zone_id: string, assignments: Assignment[]) =>
+    post('/api/v1/allocation/marginal', { category, zone_id, assignments: clean(assignments) }).then(j<Marginal>),
+  regional: async (category: number): Promise<RegionalBundle> => {
+    const [a, z] = await Promise.all([
+      get(`/api/v1/regional-access?category=${category}`).then(j<{ results: RegionalAccess[]; mapping: RegionalBundle['mapping'] }>),
+      get(`/api/v1/regional-access/zones?category=${category}`).then(j<RegionalZone[]>),
+    ])
+    return { access: a.results[0], zones: z, mapping: a.mapping }
+  },
+  sources: () => get('/api/v1/sources').then(j<Sources>),
   planStatus: () => get('/api/v1/plan/status').then(j<PlanStatus>),
   gemmaPlan: (category: number, current: Assignment[]) =>
     post('/api/v1/allocation/plan', { category, current_assignments: clean(current) }, 150000).then(j<GemmaPlan>),

@@ -1,6 +1,6 @@
-import type { AllocationResult, Compared, GemmaPlan, Setup, SetupZone } from '../lib/api'
-import { fmt } from '../lib/alloc'
-import { primaryBg } from './ui'
+import type { AllocationResult, Compared, GemmaPlan, RegionalBundle, Setup, SetupZone, Sources } from '../lib/api'
+import { clearedRoads, fmt } from '../lib/alloc'
+import { primaryBg, SourceBadge } from './ui'
 
 export interface DemoCtx {
   cat: number
@@ -14,6 +14,8 @@ export interface DemoCtx {
   cmp: Compared | null
   busy: boolean
   err: string | null
+  regional: RegionalBundle | null
+  sources: Sources | null
 }
 
 export const STEP_META = [
@@ -34,16 +36,18 @@ function content(step: number, c: DemoCtx): { title: string; body: React.ReactNo
   switch (step) {
     case 1: {
       const top = c.setup.zones.find((q) => q.zone_id === c.setup!.attention_order[0])
+      const ed = c.regional?.access.any_24h_ed.local_4km_nodes
       return {
-        title: 'A hurricane has hit. Roads are blocked.',
+        title: 'Revised NOAA surge data, limited rescue resources',
         body: (
           <>
-            In a Category {c.cat} storm, modeled flooding blocks <b className="text-[var(--coral)]">{fmt(c.result.roads.flooded_segments)}</b> road segments and simulated debris blocks <b className="text-[var(--amber)]">{c.result.roads.debris_total}</b> more.
-            Only <b>{fmt(c.result.metrics.before.hospital_locations)}</b> of {fmt(c.result.metrics.before.locations_total)} road-network locations can still reach a hospital
-            {top && <>; {top.name} is the most cut off ({Math.round(top.cut_off_pct)}%)</>}.
+            <SourceBadge kind="real" /> <b>{c.sources?.noaa.headline ?? 'NOAA SLOSH MOM v4 (2026 revision)'}</b> shows where a Category {c.cat} surge could flood roads.{' '}
+            <SourceBadge kind="calculated" /> STORMFORGE finds <b className="text-[var(--coral)]">{fmt(c.result.roads.flooded_segments)}</b> blocked road segments{ed && <> and {fmt(ed.nodes_with_route)} of {fmt(ed.nodes)} locations that can still reach a verified 24-hour emergency department</>}
+            {top && <>; {top.name} is the most cut off ({Math.round(top.cut_off_pct)}%)</>}.{' '}
+            <SourceBadge kind="simulated" /> <b className="text-[var(--amber)]">{c.result.roads.debris_total}</b> simulated debris blockages and 11 hypothetical units complete the puzzle.
           </>
         ),
-        look: 'Red dashed roads are flooded; amber dots are debris. Press 1–5 to try other storm strengths.',
+        look: 'Red dashed roads are flooded; amber dashes are debris. Press 1–5 to try other storm strengths.',
       }
     }
     case 2:
@@ -56,7 +60,8 @@ function content(step: number, c: DemoCtx): { title: string; body: React.ReactNo
       const e = entry(c, 'debris_crew', z?.zone_id)
       return {
         title: 'Send a debris-clearing crew',
-        body: e ? <>{e.message} {rz && <>Locations cut off in {rz.name}: <b>{fmt(rz.before.cut_off_locations)} → <span className="text-[#4ade80]">{fmt(rz.after.cut_off_locations)}</span></b>.</>}</> : <>The crew could not be placed{c.err ? `: ${c.err}` : '.'}</>,
+        body: e ? <>{e.message} {rz && <>Locations cut off in {rz.name}: <b>{fmt(rz.before.cut_off_locations)} → <span className="text-[#4ade80]">{fmt(rz.after.cut_off_locations)}</span></b>.</>}
+          {c.result && (() => { const r = clearedRoads(c.result, (e.details?.cleared_obstruction_ids as string[]) ?? []); return r.length ? <> Cleared: {r.map((x) => x.name).join(', ')}. <SourceBadge kind="simulated" /></> : null })()}</> : <>The crew could not be placed{c.err ? `: ${c.err}` : '.'}</>,
         look: 'The green roads on the map are the segments that were just cleared.',
       }
     }
@@ -65,7 +70,7 @@ function content(step: number, c: DemoCtx): { title: string; body: React.ReactNo
       const w = c.result.assignments.find((a) => a.resource === 'water_rescue' && a.status === 'placed')
       return {
         title: 'Add EMS coverage',
-        body: <>{e ? e.message : 'The EMS team could not be placed.'} {w && <> {w.message}</>}</>,
+        body: <>{e ? e.message : 'The EMS team could not be placed.'} {w && <> {w.message}</>} EMS coverage is a different thing from emergency-department access, which deployments do not change.</>,
         look: 'Blue dots show locations an ambulance could reach within 1.5 km. The teal ring marks potential water rescue.',
       }
     }
@@ -114,11 +119,15 @@ export function DemoCoach({ step, ctx, onBack, onNext, onExit }: { step: number;
   )
 }
 
-export function Welcome({ onStart, onSkip }: { onStart: () => void; onSkip: () => void }) {
+export function Welcome({ onStart, onSkip, sources }: { onStart: () => void; onSkip: () => void; sources: Sources | null }) {
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 p-6" role="dialog" aria-label="Welcome">
       <div className="panel w-full max-w-lg p-6" style={{ background: '#0b1120' }}>
         <div className="text-[22px] font-bold tracking-[.22em]">STORM<span style={{ color: 'var(--cyan)' }}>FORGE</span></div>
+        <div className="mt-3 flex items-center gap-2.5 rounded-lg border px-3 py-2" style={{ borderColor: 'rgba(74,222,128,.45)', background: 'rgba(74,222,128,.07)' }}>
+          <SourceBadge kind="real" />
+          <div className="leading-tight"><div className="text-[13px] font-semibold">Powered by NOAA Storm-Surge Data</div><div className="text-[11px]" style={{ color: 'var(--mute)' }}>{sources?.noaa.headline ?? 'SLOSH MOM v4 · 2026 revision'} · OpenStreetMap roads · NetworkX analysis</div></div>
+        </div>
         <p className="mt-4 text-[17px] leading-snug font-semibold">A hurricane has hit. Roads are blocked. You have limited rescue resources. Decide where to send them.</p>
         <ol className="mt-3 space-y-1 text-[13px]" style={{ color: 'var(--mute)' }}>
           <li>1 · See which neighborhoods are cut off</li>

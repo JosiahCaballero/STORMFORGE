@@ -3,7 +3,7 @@ import random
 import pytest
 from fastapi.testclient import TestClient
 
-from app.allocation import (CREW_CAPACITY, HELI_MAX_NODES, ORDER, SEED, SERVICE_RADIUS_M, TOTALS, WATER_RADIUS_M, AllocationError,
+from app.allocation import (CREW_CAPACITY, DEBRIS_MIN_CRITICALITY, DEBRIS_TARGETS, HELI_MAX_NODES, ORDER, SEED, SERVICE_RADIUS_M, TOTALS, WATER_RADIUS_M, AllocationError,
                             AllocationModel, default_model)
 from app.main import app
 from app.zones import _dist_m
@@ -24,10 +24,24 @@ def test_debris_is_deterministic_across_instances_and_calls():
     for cat in (1, 3, 5):
         a = [(o.id, o.segment, o.zone_id) for o in M.debris(cat)]
         assert a == [(o.id, o.segment, o.zone_id) for o in other.debris(cat)]
-        assert a and len(a) <= 10
+        assert a and len(a) <= DEBRIS_TARGETS[cat]
     assert M.debris_meta(3)["seed"] == SEED and str(SEED) in M.debris_meta(3)["per_category_seed"]
     assert {o.id for o in M.debris(3)} != {o.id for o in M.debris(1)}      # category-specific
     assert M.debris(0) == []
+
+
+def test_debris_targets_grow_with_category_and_are_met():
+    assert DEBRIS_TARGETS == {1: 12, 2: 25, 3: 45, 4: 65, 5: 85}
+    counts = [len(M.debris(c)) for c in range(1, 6)]
+    assert counts == sorted(counts) and counts == [DEBRIS_TARGETS[c] for c in range(1, 6)]   # enough eligible roads at every category
+    meta = M.debris_meta(3)
+    assert meta["target_count"] == 45 and meta["actual_count"] == len(M.debris(3)) and "not empirical" in meta["rule"]
+
+
+def test_debris_is_modestly_clustered_and_not_all_in_one_zone():
+    from collections import Counter
+    z = Counter(o.zone_id for o in M.debris(3))
+    assert len(z) >= 3 and max(z.values()) <= 0.5 * len(M.debris(3))
 
 
 def test_flood_and_debris_closures_are_separate_and_debris_only_on_passable_roads():
@@ -36,7 +50,7 @@ def test_flood_and_debris_closures_are_separate_and_debris_only_on_passable_road
         for o in M.debris(cat):
             assert o.open_edges, "debris must sit on roads that are otherwise passable"
             assert any(g.has_edge(u, v) for u, v, _ in o.open_edges)
-            assert o.criticality >= 5
+            assert o.criticality >= DEBRIS_MIN_CRITICALITY
             assert not any(M.edge_row[e][5] for e in o.edge_ids)          # no bridges
             # flood-closed edges of a segment are reported separately from the debris-removed ones
             assert set(o.flood_closed_edge_ids).isdisjoint({e for e in o.edge_ids if (M.edge_row[e][0], M.edge_row[e][1]) in {(u, v) for u, v, _ in o.open_edges}})
@@ -71,11 +85,12 @@ def test_crew_clears_at_most_two_and_reports_real_gain():
 
 
 def test_crew_with_single_obstruction_clears_only_that_one_and_empty_region_is_rejected_unconsumed():
-    n_lin = sum(1 for o in M.debris(CAT) if o.zone_id == "lincolnville")
-    assert n_lin == 1
-    res = M.evaluate(CAT, [A("debris_crew", "lincolnville"), A("debris_crew", "davis_shores")])
+    one = [z for z in M.zone_ids if sum(1 for o in M.debris(CAT) if o.zone_id == z) == 1]
+    assert one, "Category 3 has a zone with exactly one obstruction"
+    z1 = one[0]
+    res = M.evaluate(CAT, [A("debris_crew", z1), A("debris_crew", "davis_shores")])
     by = {e["zone_id"]: e for e in res["assignments"]}
-    assert len(by["lincolnville"]["details"]["cleared_obstruction_ids"]) == 1
+    assert len(by[z1]["details"]["cleared_obstruction_ids"]) == 1
     assert by["davis_shores"]["status"] == "rejected" and by["davis_shores"]["reason"] == "no_eligible_debris"
     assert by["davis_shores"]["consumed"] is False
     assert next(i for i in res["inventory"] if i["id"] == "debris_crew")["remaining"] == 1   # only 1 of 2 consumed
@@ -86,7 +101,7 @@ def test_crews_can_unlock_each_other_regardless_of_click_order():
     r1, r2 = M.evaluate(CAT, a), M.evaluate(CAT, a[::-1])
     assert all(e["status"] == "placed" for e in r1["assignments"])
     assert r1["metrics"] == r2["metrics"]
-    assert r1["metrics"]["delta"]["response_reach_locations"] > 18
+    assert r1["metrics"]["delta"]["response_reach_locations"] > 0
 
 
 # ------------------------------------------------------------------ inventory
@@ -252,3 +267,38 @@ def test_api_setup_evaluate_compare_actions():
     assert tc.get("/api/v1/allocation/setup", params={"category": 9}).status_code == 422
     assert tc.post("/api/v1/allocation/evaluate", json={"category": 3, "assignments": [{"resource": "tank", "zone_id": "x"}]}).status_code == 422
     assert tc.post("/api/v1/allocation/evaluate", json={"category": 3, "assignments": [{"resource": "ems_team", "zone_id": "x"}]}).status_code == 422
+
+
+# ------------------------------------------------------------------ multiple units per zone
+def test_multiple_units_same_zone_respect_inventory_and_do_not_double_count():
+    z = "west_augustine"
+    one = M.evaluate(CAT, [A("ems_team", z)])
+    two = M.evaluate(CAT, [A("ems_team", z)] * 2)
+    three = M.evaluate(CAT, [A("ems_team", z)] * 4)
+    assert [e["status"] for e in three["assignments"]].count("placed") == 3 and three["assignments"][-1]["reason"] == "inventory_exceeded"
+    assert next(i for i in three["inventory"] if i["id"] == "ems_team")["remaining"] == 0
+    # covered locations form a set: coverage grows by exactly the marginal gains, never by re-counting
+    assert one["metrics"]["after"]["ems_locations"] + two["assignments"][1]["new_locations"] == two["metrics"]["after"]["ems_locations"]
+    assert two["metrics"]["after"]["ems_locations"] <= M.node_total
+
+
+def test_mixed_units_in_one_zone_and_rejected_do_not_consume():
+    z = "west_augustine"
+    res = M.evaluate(CAT, [A("debris_crew", z), A("debris_crew", z), A("ems_team", z), A("supply_team", z), A("debris_crew", "davis_shores")])
+    st = {(e["resource"], e["zone_id"]): e["status"] for e in res["assignments"]}
+    assert st[("debris_crew", z)] == "placed" and st[("ems_team", z)] == "placed" and st[("supply_team", z)] == "placed"
+    bad = next(e for e in res["assignments"] if e["zone_id"] == "davis_shores")
+    assert bad["status"] == "rejected" and bad["reason"] == "no_eligible_debris" and bad["consumed"] is False
+    assert res["units_used"] == sum(1 for e in res["assignments"] if e["status"] == "placed")
+
+
+def test_marginal_endpoint_reports_extra_unit_benefit_and_inventory():
+    z = "lincolnville"
+    cur = [A("ems_team", z)] * 3
+    j = tc.post("/api/v1/allocation/marginal", json={"category": CAT, "zone_id": z, "assignments": cur}).json()
+    by = {r["resource"]: r for r in j["resources"]}
+    assert by["ems_team"]["remaining"] == 0 and not by["ems_team"]["valid"] and by["ems_team"]["reason"] == "inventory_exceeded"
+    assert by["supply_team"]["valid"] and by["supply_team"]["new_locations"] > 0
+    j2 = tc.post("/api/v1/allocation/marginal", json={"category": CAT, "zone_id": z, "assignments": [A("ems_team", z)] * 2}).json()
+    assert {r["resource"]: r for r in j2["resources"]}["ems_team"]["useful"] is False   # a third EMS team here adds < min_gain
+    assert j2["min_gain"] == 5

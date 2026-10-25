@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 
 maplibregl.setWorkerUrl(workerUrl)
+import type { EdFacility } from '../lib/api'
 import { ARTERIAL, edgesInfo, roadStatus, type Cat, type EdgeGeo, type Facility, type RoadProps } from '../lib/data'
 import type { AllocationResult, BaseSite, ZoneGeo } from '../lib/api'
 import { circlePolygon, LAYERS, type LayerKey } from '../lib/alloc'
@@ -71,6 +72,7 @@ interface Props {
   cat: Cat
   layers: Set<LayerKey>
   facility: Facility | null
+  eds: EdFacility[] | null
   geo: EdgeGeo | null
   zones: ZoneGeo[] | null
   /** current share of each region's locations that are cut off from help (0-100) */
@@ -93,7 +95,7 @@ function pill(text: string, col: string, title: string) {
 }
 
 export default function MapView(props: Props) {
-  const { cat, layers, facility, geo, zones, zonePct, zoneSel, onZone, result, base, flyRef, onBasemap, panelPad } = props
+  const { cat, layers, facility, eds, geo, zones, zonePct, zoneSel, onZone, result, base, flyRef, onBasemap, panelPad } = props
   const el = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const ready = useRef(false)
@@ -105,7 +107,7 @@ export default function MapView(props: Props) {
   function sync() {
     const map = mapRef.current
     if (!map || !ready.current) return
-    const { cat, layers, facility, geo, zones, zonePct, zoneSel, onZone, result, base } = P.current
+    const { cat, layers, facility, eds, geo, zones, zonePct, zoneSel, onZone, result, base } = P.current
     const on = (k: LayerKey) => layers.has(k)
 
     // --- road exposure by category
@@ -190,12 +192,15 @@ export default function MapView(props: Props) {
       b.style.opacity = '0.85'
       fm.push(new maplibregl.Marker({ element: b, anchor: 'top' }).setLngLat([base.lon, base.lat]).addTo(map))
     }
-    if (facility) {
+    const edList = eds && eds.length ? eds.map((f) => ({ name: f.name, lon: f.lon, lat: f.lat, full: f.facility_type === 'full_service_hospital', note: f.facility_type === 'full_service_hospital' ? 'full-service hospital' : 'freestanding 24-hour ED' }))
+      : facility ? [{ name: facility.name, lon: facility.lon, lat: facility.lat, full: true, note: 'OSM hospital' }] : []
+    for (const f of edList) {
       const h = document.createElement('div')
-      h.title = `${facility.name} — OSM hospital (provisional, entrance unverified)`
+      const col = f.full ? '#fbbf24' : '#22d3ee'
+      h.title = `${f.name} (${f.note}; position approximate, entrance unverified)`
       h.textContent = '+'
-      h.style.cssText = 'width:22px;height:22px;border-radius:50%;background:#0b1120;border:2px solid #fbbf24;color:#fbbf24;font:700 14px/18px sans-serif;text-align:center;box-shadow:0 0 0 4px rgba(251,191,36,.18);pointer-events:auto'
-      fm.push(new maplibregl.Marker({ element: h }).setLngLat([facility.lon, facility.lat]).addTo(map))
+      h.style.cssText = `width:22px;height:22px;border-radius:50%;background:#0b1120;border:2px solid ${col};color:${col};font:700 14px/18px sans-serif;text-align:center;box-shadow:0 0 0 4px ${col}2e;pointer-events:auto`
+      fm.push(new maplibregl.Marker({ element: h }).setLngLat([f.lon, f.lat]).addTo(map))
     }
     markers.current.fixed = fm
   }
@@ -328,7 +333,7 @@ export default function MapView(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => { sync() }, [cat, layers, facility, geo, zones, zonePct, zoneSel, onZone, result, base]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { sync() }, [cat, layers, facility, eds, geo, zones, zonePct, zoneSel, onZone, result, base]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { mapRef.current?.setPadding({ top: 60, bottom: 0, left: 0, right: panelPad }) }, [panelPad])
 
   return <div ref={el} style={{ position: 'absolute', inset: 0 }} />

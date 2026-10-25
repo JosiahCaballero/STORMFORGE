@@ -66,7 +66,15 @@ Use it to hint/disable buttons ("No debris to clear here"). A crew that is "reje
 ```
 Must never silently overwrite the user's plan: keep "My Response" and "Gemma's Recommendation" as two separate allocations; "Apply Gemma Plan" copies the Gemma assignments into the working allocation (remember the user's previous allocation so "Restore My Plan" works); "Reset Allocation" clears.
 
-## Deterministic facts for the demo (Category 3; verified)
-West Augustine: 3 debris obstructions, ~30% of locations cut off. One crew there clears 2 segments → +18 reachable locations; EMS there covers 186 locations; supply 188; water rescue 37 flood-exposed locations;
-Uptown/San Marco is ~99% cut off with 3 debris obstructions but a crew alone there is rejected (`debris_not_reachable`) until a West Augustine crew clears upstream debris (both crews → +68 total).
-Historic Downtown and Davis Shores are 100% cut off from the base: EMS/supply/water are rejected (no reachable point) but the helicopter can target a 10-location cluster there.
+## Debris scenario (simulated; seeded, deterministic)
+Target counts per category are illustrative scenario parameters, NOT empirical debris rates: Cat 1/2/3/4/5 = 12/25/45/65/85. Actual generated counts are reported (`roads.debris_total`, `debris_meta.actual_count`) and can be lower when too few eligible roads exist.
+Eligible = passable, non-bridge road segments whose blockage would cut >= 1 location off from the response base; picks are seeded (`stormforge-debris-<SEED>-<cat>`), mildly clustered (50% of picks within 350 m of an earlier pick) and spread over zones (preferred max 40% per zone, relaxed only if nothing else is eligible). Clearing never reopens flood-closed roads. Crew capacity stays 2 obstructions per crew.
+
+## POST `/api/v1/allocation/marginal` `{category, zone_id, assignments}`
+For each resource type, what ONE MORE unit in `zone_id` would add on top of the current allocation: `{resources:[{resource, remaining, valid, useful, new_locations, reason, message}], min_gain}`. `useful` = valid and adds >= `min_gain` (5) new locations. Rejected units never consume inventory.
+
+## Regional emergency-department access (separate from allocation) — see `docs/MEDICAL_ACCESS.md`
+`GET /api/v1/regional-access[?category=N]` -> `{scope, mapping, results:[{category, any_24h_ed:{local_4km_nodes, regional_nodes}, full_service_hospital:{...}, facilities:[{name, facility_type, lon, lat, position_quality, snap_distance_m, accessible, ...}], scope, mapping_valid}]}` where each basis is `{nodes, nodes_with_route, origins, origins_with_route}`.
+`GET /api/v1/regional-access/zones?category=N` -> per zone `{nodes, nodes_with_24h_ed_route, nodes_with_full_service_hospital_route}`.
+`GET /api/v1/sources` -> NOAA revision (`headline`, `revision_date`, `revision_basis`, `local_processing`) and the REAL / CALCULATED / SIMULATED classification the UI shows.
+ED destination nodes never count themselves; deployments never change ED access. `metrics.*.hospital_locations` in allocation results is the old single-hospital 4 km count and is not shown as the access headline.

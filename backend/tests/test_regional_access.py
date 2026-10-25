@@ -77,3 +77,17 @@ def test_allocation_graph_and_default_facilities_unchanged():
     assert len(e.nodes) == 1820 and len(e.facilities) == 1
     assert len(pd.read_csv(DATA / "access" / "facilities.csv")) == 1
     assert client.get("/api/v1/scenarios/3").json()["nodes_with_route"] == 1
+
+
+def test_facilities_carry_coordinates_and_class():
+    s = ra.summary(3)
+    assert {f["facility_type"] for f in s["facilities"]} == {"full_service_hospital", "freestanding_er"}
+    assert all(-82 < f["lon"] < -81 and 29 < f["lat"] < 30 for f in s["facilities"])
+
+
+def test_sources_endpoint_labels_real_calculated_simulated_and_noaa_revision():
+    j = client.get("/api/v1/sources").json()
+    assert [c["label"] for c in j["classes"]] == ["REAL DATA", "CALCULATED", "SIMULATED"]
+    assert j["noaa"]["revision_date"] == "2026-06-18" and "6/18/2026" in j["noaa"]["headline"]
+    assert "not the publication date" in j["noaa"]["local_processing"]
+    assert any("Debris" in i for i in j["classes"][2]["items"]) and "separate calculations" in j["separate_calculations"]
